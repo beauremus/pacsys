@@ -51,7 +51,7 @@ PACSys connects to services using backends:
 | **ACL/HTTP** | TCP + HTTP/CGI | None (read-only) |
 | **ACL/SSH** | TCP + SSH | Kerberos (mandatory) |
 
-See [Backends](backends.md) for details.
+See [Backends](backends/index.md) for details.
 
 ## Backend API
 
@@ -122,5 +122,5 @@ pip install -e pacsys
 
 - [Quick Start Guide](quickstart.md) - Detailed examples for reading, writing, and streaming
 - [DRF Format](drf.md) - Device addressing syntax (properties, events, ranges)
-- [Backends](backends.md) - Connection options and architecture diagrams
+- [Backends](backends/index.md) - Connection options and architecture diagrams
 - [API Reference](api.md) - Complete API documentation

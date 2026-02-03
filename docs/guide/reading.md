@@ -207,7 +207,7 @@ with pacsys.grpc() as backend:
     value = backend.read("M:OUTTMP")
 ```
 
-See [Backends](../backends.md) for details on each backend.
+See [Backends](../backends/index.md) for details on each backend.
 
 ---
 

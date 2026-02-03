@@ -229,5 +229,5 @@ with pacsys.dmq(auth=KerberosAuth()) as backend:
 ## See Also
 
 - [DRF Format](../drf.md) - Event syntax (`@p`, `@E`, `@S`)
-- [Backends](../backends.md) - Backend streaming architecture
+- [Backends](../backends/index.md) - Backend streaming architecture
 - [Reading Devices](reading.md) - One-shot reads

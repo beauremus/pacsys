@@ -14,7 +14,12 @@ nav:
     - Device API: guide/device-api.md
     - SSH: guide/ssh.md
   - DRF Format: drf.md
-  - Backends: backends.md
+  - Backends:
+    - Overview: backends/index.md
+    - DPM/HTTP: backends/dpm-http.md
+    - DPM/gRPC: backends/grpc.md
+    - DMQ: backends/dmq.md
+    - ACL: backends/acl.md
   - Specialized Utils:
     - Alarms: specialized-utils/alarms.md
     - Ramps: specialized-utils/ramps.md

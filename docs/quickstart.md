@@ -103,7 +103,7 @@ with pacsys.dmq() as backend:
     value = backend.read("M:OUTTMP")
 ```
 
-:material-arrow-right: [Backends](backends.md) - architecture, configuration, comparison
+:material-arrow-right: [Backends](backends/index.md) - architecture, configuration, comparison
 
 ---
 
@@ -143,5 +143,5 @@ re-configuring with `configure()`).
 - [Device Status](guide/status.md) - Digital status bits and control
 - [Device API](guide/device-api.md) - Object-oriented device access
 - [DRF Format](drf.md) - Device Request Format reference
-- [Backends](backends.md) - Backend architecture and comparison
+- [Backends](backends/index.md) - Backend architecture and comparison
 - [API Reference](api.md) - Complete API documentation

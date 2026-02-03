@@ -309,4 +309,4 @@ print(f"Failed: {results[1].error_code}")
 - [Reading Devices](reading.md) - Reading values back after writes
 - [Device Status](status.md) - Control commands and status verification
 - [Alarm Helpers](../specialized-utils/alarms.md) - Structured alarm read-modify-write
-- [Backends](../backends.md) - Backend architecture and comparison
+- [Backends](../backends/index.md) - Backend architecture and comparison

@@ -41,6 +41,7 @@ dev = [
   "pytest",
   "ruff",
   "ty",
+  "pre-commit",
 ]
 doc = [
   "mkdocs",
