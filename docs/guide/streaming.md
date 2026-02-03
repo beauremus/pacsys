@@ -52,7 +52,7 @@ with pacsys.subscribe(["M:OUTTMP@p,1000"]) as stream:
             stream.stop()
 ```
 
-Breaking out of the `for` loop also works — the context manager calls `stop()` on exit.
+Breaking out of the `for` loop also works - the context manager calls `stop()` on exit.
 
 ---
 
@@ -82,7 +82,7 @@ handle.stop()
 pacsys.shutdown()
 ```
 
-The callback runs on the receiver thread — keep it fast to avoid blocking other readings.
+The callback runs on the receiver thread - keep it fast to avoid blocking other readings.
 
 ---
 
@@ -148,7 +148,7 @@ with pacsys.dpm() as backend:
     combined.stop()
 ```
 
-Each `subscribe()` call creates its own TCP connection (on DPM/HTTP), so subscriptions are truly independent — stopping one doesn't affect the others.
+Each `subscribe()` call creates its own TCP connection (on DPM/HTTP), so subscriptions are truly independent - stopping one doesn't affect the others.
 
 `CombinedStream` properties:
 
@@ -228,6 +228,6 @@ with pacsys.dmq(auth=KerberosAuth()) as backend:
 
 ## See Also
 
-- [DRF Format](../drf.md) — Event syntax (`@p`, `@E`, `@S`)
-- [Backends](../backends.md) — Backend streaming architecture
-- [Reading Devices](reading.md) — One-shot reads
+- [DRF Format](../drf.md) - Event syntax (`@p`, `@E`, `@S`)
+- [Backends](../backends.md) - Backend streaming architecture
+- [Reading Devices](reading.md) - One-shot reads

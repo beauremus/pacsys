@@ -1523,11 +1523,13 @@ class DMQBackend(Backend):
             sample.ref_id = ref_id  # type: ignore[attr-defined]
             return sample
         elif isinstance(value, bytes):
-            sample = BinarySample_reply()
-            sample.value = bytearray(value)
-            sample.time = timestamp_ms
-            sample.ref_id = ref_id  # type: ignore[attr-defined]
-            return sample
+            raise ValueError(
+                "DMQ backend does not support writing bytes values. "
+                "The DMQ server rejects BinarySample messages. "
+                "For .RAW writes, pass an integer that the server will "
+                "inverse-transform into the desired raw value (the server "
+                "applies primary and common inverse transforms to the integer)."
+            )
         else:
             # Unsupported type - raise error
             raise ValueError(f"Unsupported value type for DMQ write: {type(value).__name__}")

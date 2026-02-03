@@ -863,6 +863,21 @@ class TestDMQBackendWrite:
         # After context exit (close), sessions cleared
         assert len(backend._write_sessions) == 0
 
+    def test_write_bytes_returns_error(self):
+        """DMQ server rejects BinarySample; writing bytes must fail."""
+        factory, mock_conn = create_write_select_connection_factory()
+        with (
+            mock.patch("pika.BlockingConnection"),
+            mock.patch.object(SelectConnection, "__new__", side_effect=factory),
+        ):
+            backend = DMQBackend(host="localhost", auth=_create_mock_auth())
+            try:
+                result = backend.write(TEMP_DEVICE, b"\x00\x01\x02\x03", timeout=5.0)
+                assert not result.success
+                assert "does not support writing bytes" in result.message
+            finally:
+                backend.close()
+
     def test_write_auth_failure_raises(self):
         """Test that GSS context failure during async write raises AuthenticationError."""
         factory, mock_conn = create_write_select_connection_factory()

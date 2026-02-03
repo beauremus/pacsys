@@ -43,7 +43,7 @@ for r in readings:
 
 `read()` raises `DeviceError` on failure. `get()` returns a `Reading` object you can inspect with `reading.is_error`.
 
-:material-arrow-right: [Reading Guide](guide/reading.md) — all property types, value types, error handling
+:material-arrow-right: [Reading Guide](guide/reading.md) - all property types, value types, error handling
 
 ---
 
@@ -61,7 +61,7 @@ with pacsys.subscribe(["M:OUTTMP@p,1000"]) as stream:
 
 The `@p,1000` means "send data every 1000 milliseconds". For streaming, one of repeating event types must be specified.
 
-:material-arrow-right: [Streaming Guide](guide/streaming.md) — callbacks, CombinedStream, error handling
+:material-arrow-right: [Streaming Guide](guide/streaming.md) - callbacks, CombinedStream, error handling
 
 ---
 
@@ -81,7 +81,7 @@ with pacsys.dpm(auth=auth, role="testing") as backend:
 
 pacsys automatically converts READING to SETTING and STATUS to CONTROL when writing.
 
-:material-arrow-right: [Writing Guide](guide/writing.md) — all value types, batch writes, alarm config, device control
+:material-arrow-right: [Writing Guide](guide/writing.md) - all value types, batch writes, alarm config, device control
 
 ---
 
@@ -92,7 +92,7 @@ pacsys automatically converts READING to SETTING and STATUS to CONTROL when writ
 | **DPM/HTTP** | `pacsys.dpm()` | Kerberos (writes) | :material-check: | :material-check: | :material-check: |
 | **DPM/gRPC** | `pacsys.grpc()` | JWT (writes) | :material-check: | :material-check: | :material-check: |
 | **DMQ** | `pacsys.dmq()` | Kerberos (all) | :material-check: | :material-check: | :material-check: |
-| **ACL** | `pacsys.acl()` | None | :material-check: | — | — |
+| **ACL** | `pacsys.acl()` | None | :material-check: | - | - |
 
 ```python
 # Default (DPM/HTTP, implicit)
@@ -103,7 +103,7 @@ with pacsys.dmq() as backend:
     value = backend.read("M:OUTTMP")
 ```
 
-:material-arrow-right: [Backends](backends.md) — architecture, configuration, comparison
+:material-arrow-right: [Backends](backends.md) - architecture, configuration, comparison
 
 ---
 
@@ -114,7 +114,7 @@ Resources are automatically cleaned up when the Python process exits. No explici
 
 ```python
 value = pacsys.read("M:OUTTMP")
-# That's it — connections close automatically at exit
+# That's it - connections close automatically at exit
 ```
 
 Use `shutdown()` only if you need to reset state mid-process (e.g., before
@@ -129,7 +129,7 @@ re-configuring with `configure()`).
 | `PACSYS_DPM_HOST` | DPM proxy hostname | acsys-proxy.fnal.gov |
 | `PACSYS_DPM_PORT` | DPM proxy port | 6802 |
 | `PACSYS_TIMEOUT` | Default timeout (seconds) | 10.0 |
-| `PACSYS_JWT_TOKEN` | JWT token for gRPC auth | — |
+| `PACSYS_JWT_TOKEN` | JWT token for gRPC auth | - |
 | `PACSYS_DMQ_HOST` | RabbitMQ broker host | appsrv3.fnal.gov |
 | `PACSYS_DMQ_PORT` | RabbitMQ broker port | 5672 |
 
@@ -137,11 +137,11 @@ re-configuring with `configure()`).
 
 ## Next Steps
 
-- [Reading Guide](guide/reading.md) — All property types and value types
-- [Writing Guide](guide/writing.md) — Writes, control commands, alarm config
-- [Streaming Guide](guide/streaming.md) — Continuous data, callbacks, combined streams
-- [Device Status](guide/status.md) — Digital status bits and control
-- [Device API](guide/device-api.md) — Object-oriented device access
-- [DRF Format](drf.md) — Device Request Format reference
-- [Backends](backends.md) — Backend architecture and comparison
-- [API Reference](api.md) — Complete API documentation
+- [Reading Guide](guide/reading.md) - All property types and value types
+- [Writing Guide](guide/writing.md) - Writes, control commands, alarm config
+- [Streaming Guide](guide/streaming.md) - Continuous data, callbacks, combined streams
+- [Device Status](guide/status.md) - Digital status bits and control
+- [Device API](guide/device-api.md) - Object-oriented device access
+- [DRF Format](drf.md) - Device Request Format reference
+- [Backends](backends.md) - Backend architecture and comparison
+- [API Reference](api.md) - Complete API documentation

@@ -145,9 +145,9 @@ the two 4-byte value fields are interpreted:
 | `MIN_MAX` | `0b10` | minimum | maximum |
 | `NOM_TOL` | `0b00` | nominal | tolerance |
 
-These raw values are in **primary (raw) units** — the integer or float stored in the
+These raw values are in **primary (raw) units** - the integer or float stored in the
 front-end hardware before any scaling transform is applied. The `minimum`/`maximum`
-properties, on the other hand, are in **engineering (common) units** — the scaled values
+properties, on the other hand, are in **engineering (common) units** - the scaled values
 returned by DPM after applying the device's raw-to-common transform.
 
 #### How DPM handles this server-side
@@ -155,7 +155,7 @@ returned by DPM after applying the device's raw-to-common transform.
 When you write a structured alarm field (e.g., `minimum`, `maximum`), DPM performs a
 **read-modify-write** on the 20-byte alarm block for every field write. It reads the
 current block, checks the K bits, modifies the raw values accordingly, and writes the
-block back. The K bits are **never changed** by a field write — DPM adapts the
+block back. The K bits are **never changed** by a field write - DPM adapts the
 coordinate system instead:
 
 - **Writing `minimum`/`maximum` to a MIN_MAX device**: values are stored directly in
@@ -168,12 +168,12 @@ coordinate system instead:
   coordinates: `min = nom - tol`, `max = nom + tol`.
 
 This means `minimum`/`maximum` always work correctly regardless of the device's
-underlying limit mode — DPM transparently handles the conversion.
+underlying limit mode - DPM transparently handles the conversion.
 
 #### Why pacsys only exposes minimum/maximum
 
 No backend protocol (DPM PC binary, gRPC protobuf, DMQ SDD) has structured fields for
-nominal/tolerance — they all only expose `minimum` and `maximum` in engineering units.
+nominal/tolerance - they all only expose `minimum` and `maximum` in engineering units.
 Since DPM correctly converts min/max writes to nom/tol storage when needed, there is
 no loss of functionality. The `limit_type` flag is only accessible via raw byte writes,
 but writing raw values requires knowing the device's transform to convert engineering
@@ -349,12 +349,12 @@ The backends handle this differently:
 
 Read-only keys (`alarm_status`, `abort`, `tries_now`) are silently skipped.
 
-See [Writing Guide — Alarm Configuration](../guide/writing.md#alarm-configuration-writes) for details.
+See [Writing Guide - Alarm Configuration](../guide/writing.md#alarm-configuration-writes) for details.
 
 ---
 
 ## See Also
 
-- [Writing Guide](../guide/writing.md) — General write operations and alarm dict writes
-- [DRF Format](../drf.md) — Device request format reference
-- [MOOC Property Documentation](https://www-bd.fnal.gov/controls/micro_p/mooc_project/prop.html) — Low-level alarm block details
+- [Writing Guide](../guide/writing.md) - General write operations and alarm dict writes
+- [DRF Format](../drf.md) - Device request format reference
+- [MOOC Property Documentation](https://www-bd.fnal.gov/controls/micro_p/mooc_project/prop.html) - Low-level alarm block details

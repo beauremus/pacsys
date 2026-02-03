@@ -237,14 +237,14 @@ Common error codes:
 
 | Facility | Error | Meaning |
 |----------|-------|---------|
-| 17 (DPM) | 1 | `DPM_PEND` — device not found or no data |
-| 16 (DBM) | -13 | `DBM_NOPROP` — property doesn't exist for this device |
+| 17 (DPM) | 1 | `DPM_PEND` - device not found or no data |
+| 16 (DBM) | -13 | `DBM_NOPROP` - property doesn't exist for this device |
 
 ---
 
 ## See Also
 
-- [DRF Format](../drf.md) — Full DRF syntax reference
-- [Device API](device-api.md) — Object-oriented device access
-- [Device Status](status.md) — Rich digital status reading
-- [Alarm Helpers](../specialized-utils/alarms.md) — Structured alarm access
+- [DRF Format](../drf.md) - Full DRF syntax reference
+- [Device API](device-api.md) - Object-oriented device access
+- [Device Status](status.md) - Rich digital status reading
+- [Alarm Helpers](../specialized-utils/alarms.md) - Structured alarm access

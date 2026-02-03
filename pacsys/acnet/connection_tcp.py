@@ -19,19 +19,44 @@ import select
 import socket
 import struct
 import threading
-import time
+from dataclasses import dataclass
 from typing import Optional
 
 from .constants import (
     ACNET_TCP_PORT,
+    CMD_BLOCK_REQUESTS,
+    CMD_CANCEL,
+    CMD_CONNECT,
+    CMD_DEFAULT_NODE,
+    CMD_DISCONNECT,
+    CMD_DISCONNECT_SINGLE,
+    CMD_IGNORE_REQUEST,
+    CMD_KEEPALIVE,
+    CMD_LOCAL_NODE,
+    CMD_NAME_LOOKUP,
+    CMD_NODE_LOOKUP,
+    CMD_NODE_STATS,
+    CMD_RECEIVE_REQUESTS,
+    CMD_RENAME_TASK,
+    CMD_REQUEST_ACK,
+    CMD_SEND,
+    CMD_SEND_REPLY,
+    CMD_SEND_REQUEST_TIMEOUT,
+    CMD_TASK_PID,
     DEFAULT_TIMEOUT,
-    HEARTBEAT_TIMEOUT,
     RECV_BUFFER_SIZE,
     REPLY_ENDMULT,
     REPLY_NORMAL,
     SEND_BUFFER_SIZE,
 )
-from .errors import ACNET_NOT_CONNECTED, AcnetError, AcnetUnavailableError
+from .errors import (
+    ACNET_NOT_CONNECTED,
+    ACNET_REQREJ,
+    AcnetError,
+    AcnetRequestRejectedError,
+    AcnetUnavailableError,
+)
+from .rad50 import decode_stripped as _rad50_decode, encode as _rad50_encode
 from .packet import (
     AcnetCancel,
     AcnetMessage,
@@ -56,20 +81,22 @@ ACNETD_DATA = 3
 # Handshake string
 TCP_HANDSHAKE = b"RAW\r\n\r\n"
 
-# acnetd command codes (official names from acnetd CommandList enum)
-CMD_KEEPALIVE = 0  # cmdKeepAlive
-CMD_CONNECT = 1  # cmdConnect (8-bit task ID)
-CMD_DISCONNECT = 3  # cmdDisconnect
-CMD_SEND = 4  # cmdSend (unsolicited message)
-CMD_RECEIVE_REQUESTS = 6  # cmdReceiveRequests
-CMD_SEND_REPLY = 7  # cmdSendReply
-CMD_CANCEL = 8  # cmdCancel
-CMD_REQUEST_ACK = 9  # cmdRequestAck
-CMD_NAME_LOOKUP = 11  # cmdNameLookup (name -> trunk/node)
-CMD_NODE_LOOKUP = 12  # cmdNodeLookup (trunk/node -> name)
-CMD_LOCAL_NODE = 13  # cmdLocalNode
-CMD_CONNECT_EXT = 16  # cmdConnectExt (16-bit task ID)
-CMD_SEND_REQUEST_TIMEOUT = 18  # cmdSendRequestWithTimeout
+# Keepalive interval (seconds)
+KEEPALIVE_INTERVAL = 30
+
+
+@dataclass(frozen=True)
+class NodeStats:
+    """ACNET node statistics from acnetd."""
+
+    usm_received: int
+    requests_received: int
+    replies_received: int
+    usm_sent: int
+    requests_sent: int
+    replies_sent: int
+    request_queue_limit: int
+
 
 # Type aliases for handlers
 ReplyHandler = type(lambda reply: None)
@@ -135,9 +162,6 @@ class AcnetConnectionTCP:
 
         conn.close()
     """
-
-    # RAD50 character set for encoding/decoding
-    _rad50_chars = b" ABCDEFGHIJKLMNOPQRSTUVWXYZ$.%0123456789"
 
     def __init__(self, host: str = ACSYS_PROXY_HOST, port: int = ACNET_TCP_PORT, name: str = ""):
         """
@@ -215,55 +239,6 @@ class AcnetConnectionTCP:
         """Get the remote port."""
         return self._port
 
-    @staticmethod
-    def _rtoa(r50: int) -> str:
-        """Convert RAD50 value to string."""
-        chars = AcnetConnectionTCP._rad50_chars
-        result = bytearray(6)
-
-        first_bit = r50 & 0xFFFF
-        second_bit = (r50 >> 16) & 0xFFFF
-
-        for i in range(3):
-            result[2 - i] = chars[int(first_bit % 40)]
-            first_bit //= 40
-            result[5 - i] = chars[int(second_bit % 40)]
-            second_bit //= 40
-
-        return result.decode("ascii").strip()
-
-    @staticmethod
-    def _ator(s: str) -> int:
-        """Convert string to RAD50 value."""
-
-        def char_to_index(c):
-            if "A" <= c <= "Z":
-                return ord(c) - ord("A") + 1
-            if "a" <= c <= "z":
-                return ord(c) - ord("a") + 1
-            if "0" <= c <= "9":
-                return ord(c) - ord("0") + 30
-            if c == "$":
-                return 27
-            if c == ".":
-                return 28
-            if c == "%":
-                return 29
-            return 0
-
-        first_bit = 0
-        second_bit = 0
-        s_len = len(s)
-
-        for i in range(6):
-            c = s[i] if i < s_len else " "
-            if i < 3:
-                first_bit = first_bit * 40 + char_to_index(c)
-            else:
-                second_bit = second_bit * 40 + char_to_index(c)
-
-        return (second_bit << 16) | first_bit
-
     def connect(self):
         """
         Connect to the remote ACNET daemon.
@@ -308,7 +283,7 @@ class AcnetConnectionTCP:
             raise AcnetError(status, f"CONNECT failed with status {status}")
 
         self._raw_handle = handle
-        self._handle_name = self._rtoa(handle)
+        self._handle_name = _rad50_decode(handle)
         self._connected = True
 
         logger.debug(f"Connected with handle {self._handle_name} ({handle:#x})")
@@ -381,7 +356,7 @@ class AcnetConnectionTCP:
         Returns:
             Request context that can be used to cancel the request
         """
-        task_rad50 = self._ator(task)
+        task_rad50 = _rad50_encode(task)
         mult_flag = 1 if multiple_reply else 0
         tmo = timeout if timeout > 0 else 1000
 
@@ -409,13 +384,25 @@ class AcnetConnectionTCP:
 
         # ACK format for SEND_REQUEST (code 2) - type already stripped:
         # [ack_code: 2 BE][status: 2 BE signed][req_id: 2 BE]
+        #
+        # When acnetd rejects a task (e.g., via -r flag), it sends a
+        # short 4-byte Ack (no req_id) instead of the 6-byte AckSendRequest.
+        if len(ack) < 4:
+            raise AcnetUnavailableError()
+
         if len(ack) < 6:
+            # Short ACK — error-only response (no request ID allocated)
+            _ack_code, status = struct.unpack(">Hh", ack[:4])
+            if status == ACNET_REQREJ:
+                raise AcnetRequestRejectedError(task)
+            if status < 0:
+                raise AcnetError(status, f"SEND_REQUEST to '{task}' failed")
             raise AcnetUnavailableError()
 
         ack_code, status, req_id = struct.unpack(">HhH", ack[:6])
 
         if status < 0:
-            raise AcnetError(status, "SEND_REQUEST failed")
+            raise AcnetError(status, f"SEND_REQUEST to '{task}' failed")
 
         context = AcnetRequestContext(
             connection=self,
@@ -458,7 +445,7 @@ class AcnetConnectionTCP:
         """Look up a node address by name."""
         # NAME_LOOKUP command (11) - cmdNameLookup: name -> trunk/node
         # [length: 4 BE][type: 2 BE][cmd: 2 BE][handle: 4 BE][0: 4 BE][name: 4 BE]
-        name_rad50 = self._ator(name)
+        name_rad50 = _rad50_encode(name)
         buf = struct.pack(">I2H3I", 16, ACNETD_COMMAND, CMD_NAME_LOOKUP, self._raw_handle, 0, name_rad50)
 
         ack = self._xact(buf)
@@ -493,7 +480,7 @@ class AcnetConnectionTCP:
         if status < 0:
             raise AcnetError(status, f"GET_NAME failed for node {node}")
 
-        return self._rtoa(name_rad50)
+        return _rad50_decode(name_rad50)
 
     def get_local_node(self) -> int:
         """Get the local node address."""
@@ -514,6 +501,143 @@ class AcnetConnectionTCP:
             raise AcnetError(status, "GET_LOCAL_NODE failed")
 
         return high * 256 + low
+
+    def get_default_node(self) -> int:
+        """Get the default routing node for this connection."""
+        buf = struct.pack(">I2H2I", 12, ACNETD_COMMAND, CMD_DEFAULT_NODE, self._raw_handle, 0)
+        ack = self._xact(buf)
+
+        if len(ack) < 6:
+            raise AcnetUnavailableError()
+
+        ack_code, status, high, low = struct.unpack(">HhBB", ack[:6])
+
+        if status < 0:
+            raise AcnetError(status, "GET_DEFAULT_NODE failed")
+
+        return high * 256 + low
+
+    def rename_task(self, new_name: str):
+        """Rename this connection's task handle.
+
+        Args:
+            new_name: New task name (1-6 characters)
+        """
+        if not new_name or len(new_name) > 6:
+            raise ValueError("Task name must be 1-6 characters")
+
+        name_rad50 = _rad50_encode(new_name)
+        buf = struct.pack(">I2H3I", 16, ACNETD_COMMAND, CMD_RENAME_TASK, self._raw_handle, 0, name_rad50)
+        ack = self._xact(buf)
+
+        if len(ack) < 4:
+            raise AcnetUnavailableError()
+
+        ack_code, status = struct.unpack(">Hh", ack[:4])
+
+        if status < 0:
+            raise AcnetError(status, f"RENAME_TASK failed for '{new_name}'")
+
+        self._raw_handle = name_rad50
+        self._handle_name = _rad50_decode(name_rad50)
+        logger.info(f"Renamed task to {self._handle_name}")
+
+    def send_message(self, node: int, task: str, data: bytes):
+        """Send an unsolicited message (no reply expected).
+
+        Args:
+            node: Destination node value
+            task: Destination task name
+            data: Message payload
+        """
+        task_rad50 = _rad50_encode(task)
+        content_len = 16 + len(data)
+        buf = (
+            struct.pack(
+                ">I2H3IH",
+                content_len,
+                ACNETD_COMMAND,
+                CMD_SEND,
+                self._raw_handle,
+                0,
+                task_rad50,
+                node,
+            )
+            + data
+        )
+        ack = self._xact(buf)
+
+        if len(ack) < 4:
+            raise AcnetUnavailableError()
+
+        ack_code, status = struct.unpack(">Hh", ack[:4])
+
+        if status < 0:
+            raise AcnetError(status, "SEND_MESSAGE failed")
+
+    def ignore_request(self, request: AcnetRequest):
+        """Ignore an incoming request without sending a reply.
+
+        Unlike send_reply with empty data, this signals to the daemon
+        that no response will be sent for this request.
+        """
+        with self._requests_in_lock:
+            self._requests_in.pop(request.reply_id, None)
+            request.cancel()
+
+        reply_id = request.reply_id.value & 0xFFFF
+        buf = struct.pack(">I2H2IH", 14, ACNETD_COMMAND, CMD_IGNORE_REQUEST, self._raw_handle, 0, reply_id)
+
+        try:
+            self._xact(buf)
+        except Exception as e:
+            logger.warning(f"Failed to ignore request: {e}")
+
+    def get_node_stats(self) -> NodeStats:
+        """Get ACNET node statistics from the daemon."""
+        buf = struct.pack(">I2H2I", 12, ACNETD_COMMAND, CMD_NODE_STATS, self._raw_handle, 0)
+        ack = self._xact(buf)
+
+        # AckNodeStats: [2B ack][2B status][7x4B counters]
+        if len(ack) < 32:
+            raise AcnetUnavailableError()
+
+        ack_code, status = struct.unpack(">Hh", ack[:4])
+
+        if status < 0:
+            raise AcnetError(status, "GET_NODE_STATS failed")
+
+        counters = struct.unpack(">7I", ack[4:32])
+        return NodeStats(*counters)
+
+    def get_task_pid(self, task: str) -> int:
+        """Get the OS process ID for an ACNET task.
+
+        Args:
+            task: Task name to look up
+        """
+        task_rad50 = _rad50_encode(task)
+        buf = struct.pack(">I2H3I", 16, ACNETD_COMMAND, CMD_TASK_PID, self._raw_handle, 0, task_rad50)
+        ack = self._xact(buf)
+
+        # AckTaskPid: [2B ack][2B status][4B pid]
+        if len(ack) < 8:
+            raise AcnetUnavailableError()
+
+        ack_code, status, pid = struct.unpack(">HhI", ack[:8])
+
+        if status < 0:
+            raise AcnetError(status, f"GET_TASK_PID failed for '{task}'")
+
+        return pid
+
+    def disconnect_single(self):
+        """Disconnect this single task instance (not all tasks for handle)."""
+        buf = struct.pack(">I2H2I", 12, ACNETD_COMMAND, CMD_DISCONNECT_SINGLE, self._raw_handle, 0)
+        try:
+            self._xact(buf)
+        except Exception:
+            pass
 
     def handle_messages(self, handler: MessageHandler):
         """Register a handler for unsolicited messages."""
@@ -664,12 +788,26 @@ class AcnetConnectionTCP:
         """Start receiving incoming packets."""
         if not self._receiving:
             self._receiving = True
-            # RECEIVE_REQUESTS command (6) - cmdReceiveRequests
             buf = struct.pack(">I2H2I", 12, ACNETD_COMMAND, CMD_RECEIVE_REQUESTS, self._raw_handle, 0)
             try:
                 self._xact(buf)
             except Exception as e:
                 logger.warning(f"Failed to start receiving: {e}")
+
+    def _stop_receiving(self):
+        """Stop receiving incoming packets."""
+        if self._receiving:
+            self._receiving = False
+            buf = struct.pack(">I2H2I", 12, ACNETD_COMMAND, CMD_BLOCK_REQUESTS, self._raw_handle, 0)
+            try:
+                self._xact(buf)
+            except Exception as e:
+                logger.warning(f"Failed to stop receiving: {e}")
+
+    def _send_keepalive(self):
+        """Send keepalive to maintain connection."""
+        buf = struct.pack(">I2H2I", 12, ACNETD_COMMAND, CMD_KEEPALIVE, self._raw_handle, 0)
+        self._xact(buf)
 
     def _start_read_thread(self):
         """Start the read thread."""
@@ -860,16 +998,15 @@ class AcnetConnectionTCP:
         self._monitor_thread.start()
 
     def _monitor_thread_run(self):
-        """Monitor thread main loop - handles reconnection."""
+        """Monitor thread - sends periodic keepalives to maintain connection."""
         logger.debug(f"TCP monitor thread started for {self._handle_name}")
 
-        while not self._stop_event.is_set():
-            time.sleep(HEARTBEAT_TIMEOUT / 1000.0)
-
-            if self._stop_event.is_set():
-                break
-
-            # Monitor connection health - could add ping here if needed
+        while not self._stop_event.wait(KEEPALIVE_INTERVAL):
+            try:
+                self._send_keepalive()
+            except Exception as e:
+                if not self._stop_event.is_set():
+                    logger.warning(f"Keepalive failed: {e}")
 
         logger.debug(f"TCP monitor thread stopped for {self._handle_name}")
 

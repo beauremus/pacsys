@@ -54,7 +54,7 @@ from .connection_dpm import (
     DPMReading,
 )
 from .dpm_acnet import DPMAcnet
-from .connection_tcp import ACSYS_PROXY_HOST, AcnetConnectionTCP, AcnetRequestContext
+from .connection_tcp import ACSYS_PROXY_HOST, AcnetConnectionTCP, AcnetRequestContext, NodeStats
 from .constants import (
     ACNET_HEADER_SIZE,
     ACNET_PORT,
@@ -73,6 +73,7 @@ from .errors import (
     ACNET_SUCCESS,
     AcnetError,
     AcnetNodeError,
+    AcnetRequestRejectedError,
     AcnetTaskError,
     AcnetTimeoutError,
     AcnetUnavailableError,
@@ -88,6 +89,19 @@ from .packet import (
     node_parts,
     node_value,
 )
+from .ftp import (
+    FTPClassCode,
+    FTPClassInfo,
+    FTPClient,
+    FTPDataPoint,
+    FTPDevice,
+    FTPStream,
+    SnapClassInfo,
+    SnapshotHandle,
+    SnapshotState,
+    get_ftp_class_info,
+    get_snap_class_info,
+)
 from .rad50 import decode, decode_stripped, encode
 
 __all__ = [
@@ -95,6 +109,7 @@ __all__ = [
     "AcnetConnection",
     "AcnetConnectionTCP",
     "AcnetRequestContext",
+    "NodeStats",
     "ACSYS_PROXY_HOST",
     # DPM Connection (direct HTTP)
     "DPMConnection",
@@ -123,6 +138,7 @@ __all__ = [
     "AcnetUnavailableError",
     "AcnetTimeoutError",
     "AcnetNodeError",
+    "AcnetRequestRejectedError",
     "AcnetTaskError",
     "ACNET_OK",
     "ACNET_SUCCESS",
@@ -133,6 +149,18 @@ __all__ = [
     "ACNET_DISCONNECTED",
     "ACNET_NO_NODE",
     "ACNET_NO_TASK",
+    # FTP (Fast Time Plot)
+    "FTPClient",
+    "FTPStream",
+    "SnapshotHandle",
+    "SnapshotState",
+    "FTPDevice",
+    "FTPDataPoint",
+    "FTPClassCode",
+    "FTPClassInfo",
+    "SnapClassInfo",
+    "get_ftp_class_info",
+    "get_snap_class_info",
     # Constants
     "ACNET_PORT",
     "ACNET_TCP_PORT",

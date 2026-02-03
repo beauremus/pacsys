@@ -10,7 +10,7 @@ This guide covers all write operations: scalars, arrays, raw bytes, alarm config
 
 ## Authentication Setup
 
-### DPM/HTTP — Kerberos
+### DPM/HTTP - Kerberos
 
 ```python
 from pacsys import KerberosAuth
@@ -24,7 +24,7 @@ with pacsys.dpm(auth=auth, role="testing") as backend:
 
 Both `auth` and `role` are required. Without `role`, writes raise `AuthenticationError("Role required")`.
 
-### DPM/gRPC — JWT
+### DPM/gRPC - JWT
 
 ```python
 from pacsys import JWTAuth
@@ -36,7 +36,7 @@ with pacsys.grpc(auth=auth) as backend:
     result = backend.write("Z:ACLTST", 45.0)
 ```
 
-### DMQ — Kerberos
+### DMQ - Kerberos
 
 ```python
 from pacsys import KerberosAuth
@@ -115,7 +115,7 @@ results = backend.write_many([
 
 for result in results:
     if not result.success:
-        print(f"Failed: {result.drf} — {result.message}")
+        print(f"Failed: {result.drf} - {result.message}")
 ```
 
 All devices are written in the same DPM request. Results are returned in the same order as the input list.
@@ -195,7 +195,7 @@ backend.write("Z$ACLTST.MASK", 0x00FF)     # Set mask
 On the DPM/HTTP backend, you can write multiple alarm fields by passing a dict:
 
 ```python
-# Analog alarm — set multiple fields at once
+# Analog alarm - set multiple fields at once
 backend.write("Z@ACLTST", {
     "minimum": 40.0,
     "maximum": 50.0,
@@ -306,7 +306,7 @@ print(f"Failed: {results[1].error_code}")
 
 ## See Also
 
-- [Reading Devices](reading.md) — Reading values back after writes
-- [Device Status](status.md) — Control commands and status verification
-- [Alarm Helpers](../specialized-utils/alarms.md) — Structured alarm read-modify-write
-- [Backends](../backends.md) — Backend architecture and comparison
+- [Reading Devices](reading.md) - Reading values back after writes
+- [Device Status](status.md) - Control commands and status verification
+- [Alarm Helpers](../specialized-utils/alarms.md) - Structured alarm read-modify-write
+- [Backends](../backends.md) - Backend architecture and comparison

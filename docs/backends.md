@@ -34,10 +34,10 @@ flowchart TB
 | Feature | DPM/HTTP | DPM/gRPC | DMQ | ACL |
 |---------|:--------:|:--------:|:---:|:---:|
 | **Read** | ✓ | ✓ | ✓ | ✓ |
-| **Write** | ✓ | ✓ | ✓ | — |
-| **Stream** | ✓ | ✓ | ✓ | — |
+| **Write** | ✓ | ✓ | ✓ | - |
+| **Stream** | ✓ | ✓ | ✓ | - |
 | **Auth** | Kerberos¹ | JWT | Kerberos² | None |
-| **Permissions** | Role-based | Role-based | Console class | N/A |
+| **Permissions** | Role/class | Role | Console class | N/A |
 | **Protocol** | Custom binary (PC) | gRPC/Protobuf | AMQP/SDD | HTTP/CGI |
 | **Port** | 6802 | 50051 | 5672 | 443 |
 | **Factory** | `pacsys.dpm()` | `pacsys.grpc()` | `pacsys.dmq()` | `pacsys.acl()` |
@@ -103,9 +103,9 @@ with pacsys.dpm(auth=KerberosAuth(), role="testing") as backend:
 
 When you call `write()`, the DPM server checks whether your Kerberos identity is allowed to set the target device. The server uses two authorization paths, tried in order:
 
-**Path 1 — Role + device allowlist.** The server looks up your Kerberos principal in the DB, checks that you have the requested role (e.g. `"testing"`), then checks that the target device is allowed for that role.
+**Path 1 - Role + device allowlist.** The server looks up your Kerberos principal in the DB, checks that you have the requested role (e.g. `"testing"`), then checks that the target device is allowed for that role.
 
-**Path 2 — Console class bitmask (fallback).** Only executed if role check fails. Each console user has a `classes` bitmask (e.g. `MCR`, `ASTA`, ...) and each device has a `protection_mask`. If `user.classes & device.protection_mask > 0` (i.e. values overlap on at least 1 bit), the write is allowed.
+**Path 2 - Console class bitmask (fallback).** Only executed if role check fails. Each console user has a `classes` bitmask (e.g. `MCR`, `ASTA`, ...) and each device has a `protection_mask`. If `user.classes & device.protection_mask > 0` (i.e. values overlap on at least 1 bit), the write is allowed.
 
 
 ### Configuration
@@ -168,8 +168,8 @@ with pacsys.grpc(auth=auth) as backend:
 
 | Parameter | Default | Environment Variable |
 |-----------|---------|---------------------|
-| `host` | dce08.fnal.gov | — |
-| `port` | 50051 | — |
+| `host` | dce08.fnal.gov | - |
+| `port` | 50051 | - |
 | `auth` | None | `PACSYS_JWT_TOKEN` |
 
 ### Write Permissions (JWT)
@@ -281,8 +281,8 @@ with pacsys.dmq(auth=auth) as backend:
 |-----------|---------|---------------------|
 | `host` | appsrv3.fnal.gov | `PACSYS_DMQ_HOST` |
 | `port` | 5672 | `PACSYS_DMQ_PORT` |
-| `vhost` | / | — |
-| `timeout` | 10.0 | — |
+| `vhost` | / | - |
+| `timeout` | 10.0 | - |
 
 ### For the Curious: How DMQ Writes Work
 
@@ -297,7 +297,7 @@ Your client creates:
   - A topic exchange (random UUID name, e.g. "a1b2c3d4-...")
   - A queue bound to that exchange for R.#, Q, and S.# routing keys
 
-The exchange name is your "return address" — the DMQ server publishes
+The exchange name is your "return address" - the DMQ server publishes
 responses there so only you receive them.
 ```
 
@@ -352,7 +352,7 @@ reply is the authoritative result from ACNET.
 |-------|------|-------|
 | `DMQ_INVALID_REQUEST` | -98 | Routing key doesn't match INIT dataRequest (exact string match!) |
 | `DMQ_SECURITY_VIOLATION` | -99 | MIC signature verification failed (wrong sign format) |
-| `DMQ_PENDING` | 1 | Not an error — INIT still processing, wait for final status |
+| `DMQ_PENDING` | 1 | Not an error - INIT still processing, wait for final status |
 
 The signing format must match Java's `GSSUtil.createBody`: the MIC covers not
 just the binary body but also `messageId`, `correlationId`, `replyTo`, `appId`,
@@ -390,7 +390,7 @@ All write-capable backends (DPM/HTTP, DPM/gRPC, DMQ) automatically prepare DRF s
 - **STATUS → CONTROL**: `M:OUTTMP.STATUS` becomes `M:OUTTMP.CONTROL@N`
 - **Already correct**: SETTING, CONTROL, ANALOG, DIGITAL are preserved (just `@N` is forced)
 
-The `@N` ("never") event tells the server not to send periodic data back — writes are fire-and-confirm, not subscriptions.
+The `@N` ("never") event tells the server not to send periodic data back - writes are fire-and-confirm, not subscriptions.
 
 ---
 

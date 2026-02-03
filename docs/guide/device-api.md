@@ -70,7 +70,7 @@ Invalid fields raise `ValueError`:
 
 ```python
 dev.read(field="on")      # ValueError: 'on' not allowed for READING
-dev.status(field="raw")   # OK — RAW is allowed for STATUS
+dev.status(field="raw")   # OK - RAW is allowed for STATUS
 ```
 
 ---
@@ -290,6 +290,6 @@ devices = {Device("M:OUTTMP"), Device("G:AMANDA")}
 
 ## See Also
 
-- [Reading Devices](reading.md) — Reading patterns and value types
-- [Device Status](status.md) — DigitalStatus and control commands
-- [DRF Format](../drf.md) — DRF syntax reference
+- [Reading Devices](reading.md) - Reading patterns and value types
+- [Device Status](status.md) - DigitalStatus and control commands
+- [DRF Format](../drf.md) - DRF syntax reference

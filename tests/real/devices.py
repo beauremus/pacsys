@@ -69,6 +69,19 @@ def dmq_server_available() -> bool:
         return False
 
 
+def acnet_tcp_server_available() -> bool:
+    """Check if acnetd is reachable via TCP (localhost:6802 or PACSYS_DPM_HOST)."""
+    host = os.environ.get("PACSYS_DPM_HOST", "localhost")
+    port = int(os.environ.get("PACSYS_DPM_PORT", "34567"))
+    try:
+        sock = socket.create_connection((host, port), timeout=2.0)
+        sock.sendall(b"RAW\r\n\r\n")
+        sock.close()
+        return True
+    except (socket.timeout, ConnectionRefusedError, OSError, socket.gaierror):
+        return False
+
+
 # =============================================================================
 # Skip Markers
 # =============================================================================
@@ -96,6 +109,11 @@ requires_acl = pytest.mark.skipif(
 requires_dmq = pytest.mark.skipif(
     not dmq_server_available(),
     reason="DMQ/RabbitMQ broker not available at localhost:5672",
+)
+
+requires_acnet_tcp = pytest.mark.skipif(
+    not acnet_tcp_server_available(),
+    reason="acnetd not reachable via TCP (set PACSYS_DPM_HOST/PORT or start acnetd)",
 )
 
 

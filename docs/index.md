@@ -121,7 +121,7 @@ pip install acsys
 
 ## Next Steps
 
-- [Quick Start Guide](quickstart.md) — Detailed examples for reading, writing, and streaming
-- [DRF Format](drf.md) — Device addressing syntax (properties, events, ranges)
-- [Backends](backends.md) — Connection options and architecture diagrams
-- [API Reference](api.md) — Complete API documentation
+- [Quick Start Guide](quickstart.md) - Detailed examples for reading, writing, and streaming
+- [DRF Format](drf.md) - Device addressing syntax (properties, events, ranges)
+- [Backends](backends.md) - Connection options and architecture diagrams
+- [API Reference](api.md) - Complete API documentation

@@ -19,7 +19,7 @@ status = pacsys.read("Z|ACLTST")   # | qualifier = STATUS
 
 This returns a dict with five boolean keys: `on`, `ready`, `remote`, `positive`, `ramp`.
 
-### Full Status — DigitalStatus
+### Full Status - DigitalStatus
 
 For richer information (per-bit labels, display values, any number of bits), use `Device.digital_status()`:
 
@@ -156,7 +156,7 @@ with pacsys.dpm(auth=KerberosAuth(), role="testing") as backend:
 
 ### DRF for Control
 
-Both of these are equivalent — STATUS is automatically converted to CONTROL for writes:
+Both of these are equivalent - STATUS is automatically converted to CONTROL for writes:
 
 ```python
 backend.write("Z|ACLTST", BasicControl.ON)    # | = STATUS → CONTROL
@@ -186,7 +186,7 @@ assert status.on is False
 
 ---
 
-## Writing Status as Dict — Not Supported
+## Writing Status as Dict - Not Supported
 
 You cannot write a dict to STATUS or CONTROL properties:
 
@@ -203,6 +203,6 @@ Use `BasicControl` commands instead.
 
 ## See Also
 
-- [Writing to Devices](writing.md) — General write operations
-- [Reading Devices](reading.md) — Reading status as dict
-- [Alarm Helpers](../specialized-utils/alarms.md) — Alarm configuration (separate from status)
+- [Writing to Devices](writing.md) - General write operations
+- [Reading Devices](reading.md) - Reading status as dict
+- [Alarm Helpers](../specialized-utils/alarms.md) - Alarm configuration (separate from status)

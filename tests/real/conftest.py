@@ -22,11 +22,13 @@ from pacsys.drf_utils import get_device_name
 # Import server availability checks and markers from shared module
 from .devices import (
     ALLOWED_WRITE_DEVICES,
+    acnet_tcp_server_available,
     dpm_server_available,
     grpc_server_available,
     acl_server_available,
     dmq_server_available,
     kerberos_available,
+    requires_acnet_tcp,
     requires_dpm_http,
     requires_dpm_acnet,
     requires_grpc,
@@ -36,10 +38,12 @@ from .devices import (
 
 # Re-export for backward compatibility
 __all__ = [
+    "acnet_tcp_server_available",
     "dpm_server_available",
     "grpc_server_available",
     "acl_server_available",
     "dmq_server_available",
+    "requires_acnet_tcp",
     "requires_dpm_http",
     "requires_dpm_acnet",
     "requires_grpc",
@@ -74,6 +78,10 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "dmq: marks tests that require DMQ/RabbitMQ broker",
+    )
+    config.addinivalue_line(
+        "markers",
+        "acnet_tcp: marks tests that require acnetd via TCP",
     )
     config.addinivalue_line(
         "markers",
@@ -215,6 +223,21 @@ def write_backend(request):
 # =============================================================================
 # Low-Level Connection Fixtures
 # =============================================================================
+
+
+@pytest.fixture
+def acnet_tcp_connection():
+    """Create an AcnetConnectionTCP for low-level testing."""
+    import os
+
+    from pacsys.acnet import AcnetConnectionTCP
+
+    host = os.environ.get("PACSYS_DPM_HOST", "localhost")
+    port = int(os.environ.get("PACSYS_DPM_PORT", "34567"))
+    conn = AcnetConnectionTCP(host, port)
+    conn.connect()
+    yield conn
+    conn.close()
 
 
 @pytest.fixture

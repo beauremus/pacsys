@@ -1,6 +1,7 @@
-"""Tests for the pacsys.acnet module."""
+"""Tests for the pacsys.acnet module (no network, pure unit tests)."""
 
 import struct
+from unittest.mock import patch
 
 import pytest
 
@@ -18,6 +19,7 @@ from pacsys.acnet import (
     AcnetPacket,
     AcnetReply,
     AcnetRequest,
+    NodeStats,
     ReplyId,
     RequestId,
     decode,
@@ -31,6 +33,13 @@ from pacsys.acnet.constants import (
     ACNET_FLG_REQ,
     ACNET_FLG_RPY,
     ACNET_FLG_USM,
+    CMD_DEFAULT_NODE,
+    CMD_IGNORE_REQUEST,
+    CMD_KEEPALIVE,
+    CMD_NODE_STATS,
+    CMD_RENAME_TASK,
+    CMD_SEND,
+    CMD_TASK_PID,
 )
 from pacsys.acnet.errors import (
     ERR_OK,
@@ -459,3 +468,180 @@ class TestConnectionClasses:
     def test_proxy_host_constant(self):
         """Test the proxy host constant."""
         assert ACSYS_PROXY_HOST == "acsys-proxy.fnal.gov"
+
+
+# =============================================================================
+# AcnetConnectionTCP command protocol tests (mocked _xact)
+# =============================================================================
+
+
+def _make_conn():
+    """Create a TCP connection with fake handle, bypassing real connect."""
+    conn = AcnetConnectionTCP("localhost", port=9999)
+    conn._raw_handle = encode("TEST")
+    conn._handle_name = "TEST"
+    conn._connected = True
+    return conn
+
+
+class TestTCPGetDefaultNode:
+    """Tests for get_default_node (cmdDefaultNode)."""
+
+    def test_returns_node_address(self):
+        conn = _make_conn()
+        # ack: [ack_code=4][status=0][trunk=12][node=6]
+        ack = struct.pack(">HhBB", 4, 0, 12, 6)
+        with patch.object(conn, "_xact", return_value=ack) as mock:
+            result = conn.get_default_node()
+        assert result == 12 * 256 + 6
+        buf = mock.call_args[0][0]
+        cmd = struct.unpack(">H", buf[6:8])[0]
+        assert cmd == CMD_DEFAULT_NODE
+
+    def test_error_raises(self):
+        conn = _make_conn()
+        ack = struct.pack(">HhBB", 4, -1, 0, 0)
+        with patch.object(conn, "_xact", return_value=ack):
+            with pytest.raises(AcnetError):
+                conn.get_default_node()
+
+
+class TestTCPRenameTask:
+    """Tests for rename_task (cmdRenameTask)."""
+
+    def test_renames_and_updates_handle(self):
+        conn = _make_conn()
+        ack = struct.pack(">Hh", 0, 0)
+        with patch.object(conn, "_xact", return_value=ack) as mock:
+            conn.rename_task("NEWNAM")
+        assert conn._handle_name == "NEWNAM"
+        buf = mock.call_args[0][0]
+        cmd = struct.unpack(">H", buf[6:8])[0]
+        assert cmd == CMD_RENAME_TASK
+        # RAD50 name after handle(4) + virtual_node(4) = offset 16
+        name_rad50 = struct.unpack(">I", buf[16:20])[0]
+        assert decode_stripped(name_rad50) == "NEWNAM"
+
+    def test_empty_name_raises(self):
+        conn = _make_conn()
+        with pytest.raises(ValueError):
+            conn.rename_task("")
+
+    def test_long_name_raises(self):
+        conn = _make_conn()
+        with pytest.raises(ValueError):
+            conn.rename_task("TOOLONGNAME")
+
+    def test_error_raises(self):
+        conn = _make_conn()
+        ack = struct.pack(">Hh", 0, -1)
+        with patch.object(conn, "_xact", return_value=ack):
+            with pytest.raises(AcnetError):
+                conn.rename_task("FOO")
+
+
+class TestTCPSendMessage:
+    """Tests for send_message (cmdSend)."""
+
+    def test_sends_with_payload(self):
+        conn = _make_conn()
+        ack = struct.pack(">Hh", 0, 0)
+        with patch.object(conn, "_xact", return_value=ack) as mock:
+            conn.send_message(node=0x0A06, task="DPM", data=b"\x01\x02")
+        buf = mock.call_args[0][0]
+        cmd = struct.unpack(">H", buf[6:8])[0]
+        assert cmd == CMD_SEND
+        # Payload at the end
+        assert buf[-2:] == b"\x01\x02"
+
+    def test_error_raises(self):
+        conn = _make_conn()
+        ack = struct.pack(">Hh", 0, -3)
+        with patch.object(conn, "_xact", return_value=ack):
+            with pytest.raises(AcnetError):
+                conn.send_message(0x0A06, "DPM", b"")
+
+
+class TestTCPIgnoreRequest:
+    """Tests for ignore_request (cmdIgnoreRequest)."""
+
+    def test_sends_ignore_and_cleans_up(self):
+        conn = _make_conn()
+        # Build a fake AcnetRequest
+        raw = struct.pack("<HhHHIHHH", ACNET_FLG_REQ, 0, 0, 0, 0, 0, 42, 18)
+        request = AcnetPacket.parse(raw)
+        # Register it as an incoming request
+        conn._requests_in[request.reply_id] = request
+
+        ack = struct.pack(">Hh", 0, 0)
+        with patch.object(conn, "_xact", return_value=ack) as mock:
+            conn.ignore_request(request)
+
+        assert request.reply_id not in conn._requests_in
+        assert request.cancelled
+        buf = mock.call_args[0][0]
+        cmd = struct.unpack(">H", buf[6:8])[0]
+        assert cmd == CMD_IGNORE_REQUEST
+
+
+class TestTCPGetNodeStats:
+    """Tests for get_node_stats (cmdNodeStats)."""
+
+    def test_returns_stats_dataclass(self):
+        conn = _make_conn()
+        counters = (10, 20, 30, 40, 50, 60, 100)
+        ack = struct.pack(">Hh7I", 7, 0, *counters)
+        with patch.object(conn, "_xact", return_value=ack) as mock:
+            stats = conn.get_node_stats()
+        assert isinstance(stats, NodeStats)
+        assert stats.usm_received == 10
+        assert stats.requests_received == 20
+        assert stats.replies_received == 30
+        assert stats.usm_sent == 40
+        assert stats.requests_sent == 50
+        assert stats.replies_sent == 60
+        assert stats.request_queue_limit == 100
+        buf = mock.call_args[0][0]
+        cmd = struct.unpack(">H", buf[6:8])[0]
+        assert cmd == CMD_NODE_STATS
+
+    def test_error_raises(self):
+        conn = _make_conn()
+        ack = struct.pack(">Hh7I", 7, -1, 0, 0, 0, 0, 0, 0, 0)
+        with patch.object(conn, "_xact", return_value=ack):
+            with pytest.raises(AcnetError):
+                conn.get_node_stats()
+
+
+class TestTCPGetTaskPid:
+    """Tests for get_task_pid (cmdTaskPid)."""
+
+    def test_returns_pid(self):
+        conn = _make_conn()
+        ack = struct.pack(">HhI", 6, 0, 12345)
+        with patch.object(conn, "_xact", return_value=ack) as mock:
+            pid = conn.get_task_pid("DPM")
+        assert pid == 12345
+        buf = mock.call_args[0][0]
+        cmd = struct.unpack(">H", buf[6:8])[0]
+        assert cmd == CMD_TASK_PID
+
+    def test_error_raises(self):
+        conn = _make_conn()
+        ack = struct.pack(">HhI", 6, -1, 0)
+        with patch.object(conn, "_xact", return_value=ack):
+            with pytest.raises(AcnetError):
+                conn.get_task_pid("NOPE")
+
+
+class TestTCPKeepalive:
+    """Tests for keepalive command."""
+
+    def test_keepalive_sends_correct_command(self):
+        conn = _make_conn()
+        ack = struct.pack(">Hh", 0, 0)
+        with patch.object(conn, "_xact", return_value=ack) as mock:
+            conn._send_keepalive()
+        buf = mock.call_args[0][0]
+        cmd = struct.unpack(">H", buf[6:8])[0]
+        assert cmd == CMD_KEEPALIVE

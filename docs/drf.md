@@ -118,7 +118,7 @@ Properties specify which aspect of a device to access:
 | Analog Alarm | `ANALOG` | ANALOG_ALARM, AA, PRANAB | Analog alarm limits |
 | Digital Alarm | `DIGITAL` | DIGITAL_ALARM, DA, PRDABL | Digital alarm configuration |
 | Description | `DESCRIPTION` | DESC, PRDESC | Device description text |
-| Index | `INDEX` | — | Numeric device index |
+| Index | `INDEX` | - | Numeric device index |
 | Long Name | `LONG_NAME` | LNGNAM, PRLNAM | Extended device name |
 
 ---
@@ -141,7 +141,7 @@ Uses brackets with element indices:
 
 ### Byte Range
 
-Uses braces with byte offset/length (discouraged—requires frontend knowledge):
+Uses braces with byte offset/length (discouraged-requires frontend knowledge):
 
 | Syntax | Meaning |
 |--------|---------|
