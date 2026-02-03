@@ -605,10 +605,7 @@ class FakeBackend(Backend):
         # Ranged write: slice-assign into existing stored value
         if rng is not None and key in self._readings:
             existing = self._readings[key].value
-            try:
-                merged = _write_range(existing, value, rng)
-            except (TypeError, IndexError):
-                pass  # Fall through to full replacement
+            merged = _write_range(existing, value, rng)
 
         if key in self._readings:
             old = self._readings[key]

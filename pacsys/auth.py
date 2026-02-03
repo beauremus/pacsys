@@ -54,8 +54,8 @@ class KerberosAuth(Auth):
         # Use with DPM backend
         backend = DPMHTTPBackend(auth=auth, role="testing")
 
-        # Same auth could be used with other services
-        # ssh_client = SSHClient(auth=auth)  # future
+        # Same auth works with SSH client
+        # ssh_client = SSHClient("host.fnal.gov", auth=auth)
 
     Note:
         Credentials are validated at construction time (fail fast).

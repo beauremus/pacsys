@@ -7,7 +7,6 @@ import pytest
 
 from pacsys.verify import (
     Verify,
-    verify_context,
     get_active_verify,
     resolve_verify,
     values_match,
@@ -37,26 +36,12 @@ class TestVerifyDefaults:
         with pytest.raises(AttributeError):
             v.tolerance = 1.0
 
-    def test_defaults_classmethod(self):
-        v = Verify.defaults(tolerance=0.1, max_attempts=10)
-        assert v.tolerance == 0.1
-        assert v.max_attempts == 10
-        assert v.check_first is False  # still default
-
 
 class TestVerifyContextManager:
     def test_context_manager_push_pop(self):
         assert get_active_verify() is None
         v = Verify(tolerance=1.0)
         with v:
-            assert get_active_verify() is v
-        assert get_active_verify() is None
-
-    def test_verify_context_function(self):
-        assert get_active_verify() is None
-        v = Verify(tolerance=2.0)
-        with verify_context(v) as ctx:
-            assert ctx is v
             assert get_active_verify() is v
         assert get_active_verify() is None
 

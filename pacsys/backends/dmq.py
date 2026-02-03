@@ -283,7 +283,8 @@ def _get_host_address() -> bytes:
         s.connect(("8.8.8.8", 80))
         local_ip = socket.inet_aton(s.getsockname()[0])
         s.close()
-    except Exception:
+    except OSError as e:
+        logger.warning("Cannot determine local IP, falling back to FNAL proxy: %s", e)
         local_ip = _FNAL_PROXY
 
     _cached_host_address = local_ip if _in_fnal_range(local_ip) else _FNAL_PROXY
@@ -291,7 +292,11 @@ def _get_host_address() -> bytes:
 
 
 def _extract_basic_status(reply):
-    """Extract BasicStatus value as dict."""
+    """Extract BasicStatus value as dict.
+
+    BasicStatus_struct fields are set by the unmarshaler only if present
+    in the wire data, so getattr is necessary here.
+    """
     if not hasattr(reply, "value"):
         return {}
     v = reply.value
@@ -311,14 +316,14 @@ def _extract_analog_alarm(reply):
         return {}
     v = reply.value
     return {
-        "minimum": getattr(v, "minimum", 0.0),
-        "maximum": getattr(v, "maximum", 0.0),
-        "alarm_enable": getattr(v, "alarm_enable", False),
-        "alarm_status": getattr(v, "alarm_status", False),
-        "abort": getattr(v, "abort", False),
-        "abort_inhibit": getattr(v, "abort_inhibit", False),
-        "tries_needed": getattr(v, "tries_needed", 0),
-        "tries_now": getattr(v, "tries_now", 0),
+        "minimum": v.minimum,
+        "maximum": v.maximum,
+        "alarm_enable": v.alarm_enable,
+        "alarm_status": v.alarm_status,
+        "abort": v.abort,
+        "abort_inhibit": v.abort_inhibit,
+        "tries_needed": v.tries_needed,
+        "tries_now": v.tries_now,
     }
 
 
@@ -328,14 +333,14 @@ def _extract_digital_alarm(reply):
         return {}
     v = reply.value
     return {
-        "nominal": getattr(v, "nominal", 0),
-        "mask": getattr(v, "mask", 0),
-        "alarm_enable": getattr(v, "alarm_enable", False),
-        "alarm_status": getattr(v, "alarm_status", False),
-        "abort": getattr(v, "abort", False),
-        "abort_inhibit": getattr(v, "abort_inhibit", False),
-        "tries_needed": getattr(v, "tries_needed", 0),
-        "tries_now": getattr(v, "tries_now", 0),
+        "nominal": v.nominal,
+        "mask": v.mask,
+        "alarm_enable": v.alarm_enable,
+        "alarm_status": v.alarm_status,
+        "abort": v.abort,
+        "abort_inhibit": v.abort_inhibit,
+        "tries_needed": v.tries_needed,
+        "tries_now": v.tries_now,
     }
 
 

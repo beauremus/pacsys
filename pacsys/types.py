@@ -313,8 +313,8 @@ class CombinedStream:
                             return
                     if sub.stopped:
                         return
-            except Exception:
-                pass
+            except Exception as exc:
+                shared.put(exc)
             finally:
                 shared.put(_sentinel)
 
@@ -356,6 +356,9 @@ class CombinedStream:
                         break
                     continue
 
+                if isinstance(item, Exception):
+                    raise item
+
                 # Got first reading — drain all currently available into a heap
                 heap = []
                 reading, handle = item
@@ -371,6 +374,8 @@ class CombinedStream:
                     if item is _sentinel:
                         finished_count += 1
                         continue
+                    if isinstance(item, Exception):
+                        raise item
                     reading, handle = item
                     ts = reading.timestamp or datetime.min
                     heapq.heappush(heap, (ts, counter, reading, handle))

@@ -24,19 +24,26 @@ class DataRequest:
         event: DRF_EVENT,
         extra: DRF_EXTRA | None = None,
     ):
-        assert isinstance(raw_string, str)
+        if not isinstance(raw_string, str):
+            raise TypeError(f"raw_string must be str, got {type(raw_string).__name__}")
         self.raw_string = raw_string
-        assert isinstance(device, str)
+        if not isinstance(device, str):
+            raise TypeError(f"device must be str, got {type(device).__name__}")
         self.device = device
-        assert property is None or isinstance(property, DRF_PROPERTY)
+        if property is not None and not isinstance(property, DRF_PROPERTY):
+            raise TypeError(f"property must be DRF_PROPERTY or None, got {type(property).__name__}")
         self.property = property
-        assert range is None or isinstance(range, (ARRAY_RANGE, BYTE_RANGE))
+        if range is not None and not isinstance(range, (ARRAY_RANGE, BYTE_RANGE)):
+            raise TypeError(f"range must be ARRAY_RANGE, BYTE_RANGE, or None, got {type(range).__name__}")
         self.range = range
-        assert field is None or isinstance(field, DRF_FIELD)
+        if field is not None and not isinstance(field, DRF_FIELD):
+            raise TypeError(f"field must be DRF_FIELD or None, got {type(field).__name__}")
         self.field = field
-        assert event is None or isinstance(event, DRF_EVENT)
+        if event is not None and not isinstance(event, DRF_EVENT):
+            raise TypeError(f"event must be DRF_EVENT or None, got {type(event).__name__}")
         self.event = event
-        assert extra is None or isinstance(extra, DRF_EXTRA)
+        if extra is not None and not isinstance(extra, DRF_EXTRA):
+            raise TypeError(f"extra must be DRF_EXTRA or None, got {type(extra).__name__}")
         self.extra = extra
         self.property_explicit = False
 
@@ -77,13 +84,6 @@ class DataRequest:
     @property
     def is_control(self):
         return self.property == DRF_PROPERTY.CONTROL
-
-    @property
-    def extra_type(self):
-        if self.extra == "FTP":
-            return DRF_EXTRA.FTP
-        else:
-            raise Exception(f"Unknown extra {self.extra}")
 
     @property
     def parts(self):
@@ -172,10 +172,12 @@ class DataRequest:
 
 
 def parse_request(device_str: str) -> DataRequest:
-    assert device_str is not None
+    if device_str is None:
+        raise ValueError("device_str must not be None")
     if "<-" in device_str:
         splits = device_str.split("<-")
-        assert len(splits) == 2, f"Invalid drf {device_str}"
+        if len(splits) != 2:
+            raise ValueError(f"Invalid drf {device_str}")
         device_str, extra = splits
         extra_obj = parse_extra(extra)
     else:

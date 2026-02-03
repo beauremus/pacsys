@@ -34,6 +34,9 @@ from .devices import (
     requires_grpc,
     requires_acl,
     requires_dmq,
+    requires_ssh,
+    SSH_JUMP_HOST,
+    SSH_DEST_HOST,
 )
 
 # Re-export for backward compatibility
@@ -49,6 +52,9 @@ __all__ = [
     "requires_grpc",
     "requires_acl",
     "requires_dmq",
+    "requires_ssh",
+    "SSH_JUMP_HOST",
+    "SSH_DEST_HOST",
 ]
 
 
@@ -94,6 +100,10 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "write: marks tests that write to real devices (enable with PACSYS_TEST_WRITE=1)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "ssh: marks tests that require SSH access to jump/dest hosts",
     )
 
 

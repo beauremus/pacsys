@@ -11,10 +11,11 @@ See SPECIFICATION.md for full API reference.
 """
 
 import atexit
+import logging
 import os
 import threading
 import weakref
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, Union, TYPE_CHECKING
 
 from pacsys.auth import Auth, KerberosAuth, JWTAuth
 from pacsys.drf3 import DataRequest
@@ -47,6 +48,17 @@ from pacsys.alarm_block import (
 from pacsys.corrector_ramp import CorrectorRamp, BoosterRamp  # noqa: F401
 from pacsys.digital_status import StatusBit, DigitalStatus  # noqa: F401
 from pacsys.verify import Verify  # noqa: F401
+from pacsys.ssh import (  # noqa: F401
+    SSHClient,
+    SSHHop,
+    CommandResult,
+    Tunnel,
+    SFTPSession,
+    SSHError,
+    SSHConnectionError,
+    SSHCommandError,
+    SSHTimeoutError,
+)
 
 if TYPE_CHECKING:
     from pacsys.backends.dpm_http import DPMHTTPBackend
@@ -56,15 +68,12 @@ if TYPE_CHECKING:
 
 __version__ = "0.1.0"
 
+logger = logging.getLogger(__name__)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Environment Variables (read at import)
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-def _get_env_str(name: str, default: Optional[str] = None) -> Optional[str]:
-    """Get environment variable as string."""
-    return os.environ.get(name, default)
 
 
 def _get_env_int(name: str, default: Optional[int] = None) -> Optional[int]:
@@ -90,7 +99,7 @@ def _get_env_float(name: str, default: Optional[float] = None) -> Optional[float
 
 
 # Read environment variables at import time
-_env_dpm_host = _get_env_str("PACSYS_DPM_HOST")
+_env_dpm_host = os.environ.get("PACSYS_DPM_HOST")
 _env_dpm_port = _get_env_int("PACSYS_DPM_PORT")
 _env_pool_size = _get_env_int("PACSYS_POOL_SIZE")
 _env_timeout = _get_env_float("PACSYS_TIMEOUT")
@@ -136,7 +145,7 @@ def _atexit_close_backends() -> None:
         try:
             backend.close()
         except Exception:
-            pass
+            logger.debug("Error closing backend during atexit", exc_info=True)
 
 
 atexit.register(_atexit_close_backends)
@@ -229,10 +238,22 @@ def _get_global_backend() -> "DPMHTTPBackend":
         from pacsys.backends.dpm_http import DPMHTTPBackend
 
         # Determine effective settings (priority: configure() > env > defaults)
-        host = _config_dpm_host or _env_dpm_host or "acsys-proxy.fnal.gov"
-        port = _config_dpm_port or _env_dpm_port or 6802
-        pool_size = _config_pool_size or _env_pool_size or 4
-        timeout = _config_timeout or _env_timeout or 5.0
+        host = (
+            _config_dpm_host
+            if _config_dpm_host is not None
+            else (_env_dpm_host if _env_dpm_host is not None else "acsys-proxy.fnal.gov")
+        )
+        port = (
+            _config_dpm_port if _config_dpm_port is not None else (_env_dpm_port if _env_dpm_port is not None else 6802)
+        )
+        pool_size = (
+            _config_pool_size
+            if _config_pool_size is not None
+            else (_env_pool_size if _env_pool_size is not None else 4)
+        )
+        timeout = (
+            _config_timeout if _config_timeout is not None else (_env_timeout if _env_timeout is not None else 5.0)
+        )
 
         _global_dpm_backend = _track(
             DPMHTTPBackend(
@@ -452,23 +473,7 @@ def dpm(
             print(f"Authenticated as: {backend.principal}")
             result = backend.write("M:OUTTMP", 72.5)
     """
-    from pacsys.backends.dpm_http import DPMHTTPBackend
-
-    effective_host = host or "acsys-proxy.fnal.gov"
-    effective_port = port or 6802
-    effective_pool_size = pool_size or 4
-    effective_timeout = timeout or 5.0
-
-    return _track(
-        DPMHTTPBackend(
-            host=effective_host,
-            port=effective_port,
-            pool_size=effective_pool_size,
-            timeout=effective_timeout,
-            auth=auth,
-            role=role,
-        )
-    )
+    return dpm_http(host=host, port=port, pool_size=pool_size, timeout=timeout, auth=auth, role=role)
 
 
 def dpm_http(
@@ -509,10 +514,10 @@ def dpm_http(
     """
     from pacsys.backends.dpm_http import DPMHTTPBackend
 
-    effective_host = host or "acsys-proxy.fnal.gov"
-    effective_port = port or 6802
-    effective_pool_size = pool_size or 4
-    effective_timeout = timeout or 5.0
+    effective_host = host if host is not None else "acsys-proxy.fnal.gov"
+    effective_port = port if port is not None else 6802
+    effective_pool_size = pool_size if pool_size is not None else 4
+    effective_timeout = timeout if timeout is not None else 5.0
 
     return _track(
         DPMHTTPBackend(
@@ -643,6 +648,48 @@ def dmq(
     return _track(DMQBackend(**kwargs))
 
 
+def ssh(
+    hops: "Union[str, SSHHop, list[str | SSHHop]]",
+    auth: Optional[Auth] = None,
+    connect_timeout: float = 10.0,
+) -> "SSHClient":
+    """Create an SSH client for remote command execution, tunneling, and SFTP.
+
+    Supports multi-hop connections through jump hosts using Kerberos (GSSAPI),
+    key-based, or password authentication.
+
+    Args:
+        hops: Target host(s). Accepts a hostname string, SSHHop, or list of either.
+              Multiple hops create a chain (jump hosts).
+        auth: Optional KerberosAuth for GSSAPI hops. If None and any hop uses
+              gssapi auth, credentials are validated at construction time.
+        connect_timeout: TCP connection timeout in seconds (default 10.0).
+
+    Returns:
+        SSHClient instance (use as context manager or call close() when done)
+
+    Example (single hop):
+        with pacsys.ssh("target.fnal.gov") as client:
+            result = client.exec("hostname")
+            print(result.stdout)
+
+    Example (multi-hop with Kerberos):
+        auth = KerberosAuth()
+        with pacsys.ssh(["jump.fnal.gov", "target.fnal.gov"], auth=auth) as client:
+            result = client.exec("ls /data")
+
+    Example (port forwarding):
+        with pacsys.ssh("jump.fnal.gov") as client:
+            with client.forward(23456, "dce08.fnal.gov", 50051) as tunnel:
+                # Use gRPC backend via tunnel
+                with pacsys.grpc(port=tunnel.local_port) as backend:
+                    value = backend.read("M:OUTTMP")
+    """
+    from pacsys.ssh import SSHClient as _SSHClient
+
+    return _SSHClient(hops=hops, auth=auth, connect_timeout=connect_timeout)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Lazy Imports
 # ─────────────────────────────────────────────────────────────────────────────
@@ -703,6 +750,16 @@ __all__ = [
     "DigitalStatus",
     # Verify
     "Verify",
+    # SSH
+    "SSHClient",
+    "SSHHop",
+    "CommandResult",
+    "Tunnel",
+    "SFTPSession",
+    "SSHError",
+    "SSHConnectionError",
+    "SSHCommandError",
+    "SSHTimeoutError",
     # Simple API functions
     "read",
     "get",
@@ -718,6 +775,7 @@ __all__ = [
     "grpc",
     "dmq",
     "acl",
+    "ssh",
     # Submodule
     "acnet",
     # Internal (for Device)

@@ -30,7 +30,8 @@ class EPICSDevice(Device):
 def get_qualified_device(device_str: str, prop: DRF_PROPERTY):
     if len(device_str) < 3:
         raise ValueError(f"{device_str} is too short for device")
-    assert prop in DRF_PROPERTY
+    if prop not in DRF_PROPERTY:
+        raise ValueError(f"prop must be a DRF_PROPERTY member, got {prop!r}")
     ext = prop.value
     ld = list(device_str)
     ld[1] = ext
@@ -38,7 +39,8 @@ def get_qualified_device(device_str: str, prop: DRF_PROPERTY):
 
 
 def parse_device(raw_string, assume_epics: bool = True) -> Device:
-    assert raw_string is not None
+    if raw_string is None:
+        raise ValueError("raw_string must not be None")
     match = PATTERN_NAME.match(raw_string)
     if match is None:
         if assume_epics:

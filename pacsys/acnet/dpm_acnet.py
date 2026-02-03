@@ -10,6 +10,7 @@ This is an alternative to the direct HTTP-based DPMConnection.
 import logging
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Optional
 
@@ -107,8 +108,8 @@ class DPMAcnet:
         self._dev_list: dict[int, str] = {}  # tag -> drf
         self._meta: dict[int, dict] = {}  # ref_id -> metadata
 
-        # Reply handling
-        self._reply_queue: list = []
+        # Reply handling (deque is thread-safe for append/popleft under GIL)
+        self._reply_queue: deque = deque()
         self._reply_event = threading.Event()
         self._request_ctx = None
 
@@ -384,14 +385,14 @@ class DPMAcnet:
         while True:
             # Check queue first
             if self._reply_queue:
-                yield self._reply_queue.pop(0)
+                yield self._reply_queue.popleft()
                 continue
 
             # Wait for new data
             self._reply_event.clear()
             if self._reply_event.wait(timeout=timeout):
                 if self._reply_queue:
-                    yield self._reply_queue.pop(0)
+                    yield self._reply_queue.popleft()
             else:
                 # Timeout
                 return

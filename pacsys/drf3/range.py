@@ -95,7 +95,8 @@ class BYTE_RANGE:
             if length != MAXIMUM and offset + length > MAX_UPPER_BOUND:
                 raise ValueError("offset + length must be less than Integer.MAX_VALUE")
             if offset == 0 and length == MAXIMUM:
-                assert mode == "full", "mode must be full"
+                if mode != "full":
+                    raise ValueError("mode must be 'full' when offset=0 and length=MAXIMUM")
         self.offset = offset
         self.length = length
         self.mode = mode  # or ('full' if (low is None and high is None) else 'std')
@@ -107,7 +108,7 @@ class BYTE_RANGE:
         if self.mode == "full":
             return "{:}"
         elif self.mode == "single":
-            s = f"{{{self.offset}}}]"
+            s = f"{{{self.offset}}}"
             return s
         else:
             s = "{"

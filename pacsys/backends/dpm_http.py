@@ -82,11 +82,6 @@ _DEFAULT_QUEUE_MAXSIZE = 10000
 # Kerberos service principal for DPM
 
 
-def _ensure_immediate_event(drf: str) -> str:
-    """Ensure DRF has immediate event (@I) if no event specified."""
-    return ensure_immediate_event(drf)
-
-
 def _reply_to_value_and_type(reply) -> tuple[Optional[Value], ValueType]:
     """Extract value and type from a DPM data reply."""
     if isinstance(reply, Scalar_reply):
@@ -94,6 +89,8 @@ def _reply_to_value_and_type(reply) -> tuple[Optional[Value], ValueType]:
     elif isinstance(reply, ScalarArray_reply):
         return np.array(reply.data), ValueType.SCALAR_ARRAY
     elif isinstance(reply, TimedScalarArray_reply):
+        if hasattr(reply, "micros") and reply.micros:
+            logger.debug(f"TimedScalarArray: {len(reply.micros)} per-sample timestamps discarded")
         return np.array(reply.data), ValueType.SCALAR_ARRAY
     elif isinstance(reply, Raw_reply):
         return bytes(reply.data), ValueType.RAW
@@ -491,7 +488,7 @@ class DPMHTTPBackend(Backend):
         effective_timeout = timeout if timeout is not None else self._timeout
         deadline = time.monotonic() + effective_timeout
 
-        prepared_drfs = [_ensure_immediate_event(drf) for drf in drfs]
+        prepared_drfs = [ensure_immediate_event(drf) for drf in drfs]
 
         device_infos: dict[int, DeviceInfo_reply] = {}
         data_replies: dict[int, object] = {}
@@ -514,39 +511,47 @@ class DPMHTTPBackend(Backend):
             start_req.list_id = list_id
             conn.send_message(start_req)
 
-            while received_count < expected_count:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-
-                try:
-                    reply = conn.recv_message(timeout=min(remaining, 2.0))
-                except TimeoutError:
-                    if time.monotonic() >= deadline:
+            try:
+                while received_count < expected_count:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
                         break
-                    continue
 
-                if isinstance(reply, DeviceInfo_reply):
-                    device_infos[reply.ref_id] = reply
-                elif isinstance(reply, StartList_reply):
-                    if reply.status != 0:
-                        logger.warning(f"StartList returned status {reply.status}")
-                elif isinstance(reply, ListStatus_reply):
-                    pass
-                elif isinstance(reply, Status_reply):
-                    # Only count first reply per ref_id (ignore subsequent periodic updates)
-                    if reply.ref_id not in data_replies:
-                        data_replies[reply.ref_id] = reply
-                        received_count += 1
-                elif hasattr(reply, "ref_id"):
-                    # Only count first reply per ref_id (ignore subsequent periodic updates)
-                    if reply.ref_id not in data_replies:
-                        data_replies[reply.ref_id] = reply
-                        received_count += 1
+                    try:
+                        reply = conn.recv_message(timeout=min(remaining, 2.0))
+                    except TimeoutError:
+                        if time.monotonic() >= deadline:
+                            break
+                        continue
 
-            clear_req = ClearList_request()
-            clear_req.list_id = list_id
-            conn.send_message(clear_req)
+                    if isinstance(reply, DeviceInfo_reply):
+                        device_infos[reply.ref_id] = reply
+                    elif isinstance(reply, StartList_reply):
+                        if reply.status != 0:
+                            logger.warning(f"StartList returned status {reply.status}")
+                    elif isinstance(reply, ListStatus_reply):
+                        pass
+                    elif isinstance(reply, Status_reply):
+                        # Only count first reply per ref_id (ignore subsequent periodic updates)
+                        if reply.ref_id not in data_replies:
+                            data_replies[reply.ref_id] = reply
+                            received_count += 1
+                    elif hasattr(reply, "ref_id"):
+                        # Only count first reply per ref_id (ignore subsequent periodic updates)
+                        if reply.ref_id not in data_replies:
+                            data_replies[reply.ref_id] = reply
+                            received_count += 1
+            finally:
+                try:
+                    stop_req = StopList_request()
+                    stop_req.list_id = list_id
+                    conn.send_message(stop_req)
+
+                    clear_req = ClearList_request()
+                    clear_req.list_id = list_id
+                    conn.send_message(clear_req)
+                except Exception:
+                    pass  # Best-effort cleanup on broken connection
 
         readings: list[Reading] = []
 
@@ -668,15 +673,20 @@ class DPMHTTPBackend(Backend):
         enable_req.message = message
         conn.send_message(enable_req)
 
-        # Server replies with Status_reply (status=0 on success, DPM_PRIV on failure)
-        reply = conn.recv_message(timeout=self._timeout)
-        if isinstance(reply, Status_reply):
-            status = reply.status
-            if status != 0:
-                facility, error = parse_error(status)
-                raise AuthenticationError(
-                    f"EnableSettings failed: facility={facility}, error={error} (DPM_PRIV = privilege denied)"
-                )
+        # Server replies with Status_reply (status=0 on success, DPM_PRIV on failure).
+        # Skip any ListStatus_reply heartbeats that may arrive first.
+        while True:
+            reply = conn.recv_message(timeout=self._timeout)
+            if isinstance(reply, ListStatus_reply):
+                continue
+            if isinstance(reply, Status_reply):
+                if reply.status != 0:
+                    facility, error = parse_error(reply.status)
+                    raise AuthenticationError(
+                        f"EnableSettings failed: facility={facility}, error={error} (DPM_PRIV = privilege denied)"
+                    )
+                break
+            raise AuthenticationError(f"Unexpected reply during EnableSettings: {type(reply).__name__}")
         logger.debug("EnableSettings accepted")
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -706,9 +716,13 @@ class DPMHTTPBackend(Backend):
                     fresh.append(wc)
             self._write_connections = fresh
 
-            # Try to get an existing connection
-            if self._write_connections:
+            # Try to get an existing live connection
+            while self._write_connections:
                 wc = self._write_connections.pop(0)
+                if not wc.conn.connected:
+                    logger.debug(f"Discarding dead write connection (list_id={wc.conn.list_id})")
+                    wc.close()
+                    continue
                 wc.last_used = time.monotonic()
                 logger.debug(f"Reusing authenticated write connection (list_id={wc.conn.list_id})")
                 return wc
@@ -922,7 +936,11 @@ class DPMHTTPBackend(Backend):
         apply_reply = None
 
         try:
-            # Clear previous requests from reused connection
+            # Stop and clear previous requests from reused connection
+            stop_req = StopList_request()
+            stop_req.list_id = list_id
+            conn.send_message(stop_req)
+
             clear_req = ClearList_request()
             clear_req.list_id = list_id
             conn.send_message(clear_req)
@@ -1136,8 +1154,8 @@ class DPMHTTPBackend(Backend):
                     self._selector.register(sock, selectors.EVENT_READ, data=sub_id)
                 elif action == "unregister":
                     self._selector.unregister(sock)
-            except (KeyError, ValueError, OSError):
-                pass
+            except (KeyError, ValueError, OSError) as e:
+                logger.warning("Selector %s failed for sub_id=%s: %s", action, sub_id, e)
 
     def _receiver_loop(self) -> None:
         """Single thread that receives from all streaming connections."""
@@ -1192,6 +1210,10 @@ class DPMHTTPBackend(Backend):
             self._dispatch_reply(sub_id, reply)
 
         except DPMConnectionError as e:
+            # Check if subscription was removed during recv (normal teardown)
+            with self._stream_lock:
+                if sub_id not in self._stream_connections:
+                    return
             logger.error(f"Connection error for sub_id={sub_id}: {e}")
             self._handle_connection_error(sub_id, e)
 
@@ -1200,6 +1222,9 @@ class DPMHTTPBackend(Backend):
             pass
 
         except Exception as e:
+            with self._stream_lock:
+                if sub_id not in self._stream_connections:
+                    return
             logger.error(f"Unexpected error for sub_id={sub_id}: {e}")
             self._handle_connection_error(sub_id, e)
 
@@ -1276,9 +1301,10 @@ class DPMHTTPBackend(Backend):
             )
 
         value, value_type = _reply_to_value_and_type(reply)
-        status = getattr(reply, "status", 0)
-        timestamp = getattr(reply, "timestamp", 0)
-        cycle = getattr(reply, "cycle", 0)
+        # Alarm/status replies have no status field -- receiving them means success (0)
+        status = reply.status if hasattr(reply, "status") else 0
+        timestamp = reply.timestamp
+        cycle = reply.cycle
 
         facility, error = parse_error(status)
 
@@ -1327,9 +1353,13 @@ class DPMHTTPBackend(Backend):
 
             conn = stream_conn.conn
 
-        # Queue selector unregister (processed by receiver thread)
-        self._selector_ops.put(("unregister", conn._socket, None))
-        self._wakeup()
+        # Save socket reference before close (conn.close() sets _socket to None)
+        sock = conn._socket
+
+        # Queue selector unregister before closing (needs valid socket)
+        if sock is not None:
+            self._selector_ops.put(("unregister", sock, None))
+            self._wakeup()
 
         # Close connection (outside lock)
         try:

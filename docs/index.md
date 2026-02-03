@@ -16,9 +16,9 @@ High level features:
 
 Low level features:
 
-- **Raw ACNET UDP/TCP** - talk to tasks on other nodes (via acnetd)
-- **FTPMAN/GETS32** - get data direct from frontends
-- **Remote execution on clx** - SSH-based runners, useful for ACL/DABBEL
+- **Raw ACNET UDP/TCP** - talk to tasks on other nodes (via acnetd TCP/UDP)
+- **FTPMAN snapshots** - so much juicy data
+- **SSH utilities and ACL-over-SSH** - authenticated command runners, useful for ACL/DABBEL
 
 ```mermaid
 flowchart LR
@@ -116,7 +116,7 @@ See the [Device API guide](guide/device-api.md) for full documentation.
 ## Installation
 
 ```bash
-pip install acsys
+pip install pacsys
 ```
 
 ## Next Steps

@@ -12,6 +12,7 @@ nav:
     - Streaming: guide/streaming.md
     - Device Status: guide/status.md
     - Device API: guide/device-api.md
+    - SSH: guide/ssh.md
   - DRF Format: drf.md
   - Backends: backends.md
   - Specialized Utils:

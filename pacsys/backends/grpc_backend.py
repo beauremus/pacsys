@@ -71,19 +71,22 @@ _RECONNECT_BACKOFF_FACTOR = 2.0
 _DEFAULT_QUEUE_MAXSIZE = 10000
 
 # gRPC status code classification
+# CANCELLED is retryable because server restarts/shutdowns trigger it and the
+# subscription should recover. Only truly non-recoverable codes are fatal.
 _FATAL_STATUS_CODES = (
     frozenset(
         {
             grpc.StatusCode.UNAUTHENTICATED,
             grpc.StatusCode.PERMISSION_DENIED,
             grpc.StatusCode.INVALID_ARGUMENT,
-            grpc.StatusCode.CANCELLED,
         }
     )
     if GRPC_AVAILABLE
     else frozenset()
 )
-_RETRYABLE_STATUS_CODES = frozenset({grpc.StatusCode.UNAVAILABLE}) if GRPC_AVAILABLE else frozenset()
+_RETRYABLE_STATUS_CODES = (
+    frozenset({grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.CANCELLED}) if GRPC_AVAILABLE else frozenset()
+)
 
 
 def _grpc_error_code(e: "grpc.aio.AioRpcError") -> int:
@@ -109,7 +112,7 @@ _DIGITAL_ALARM_KEYS = _DIGITAL_ONLY_KEYS | _SHARED_ALARM_KEYS
 _ALARM_READONLY_KEYS = {"abort", "alarm_status", "tries_now"}
 
 
-def _value_to_proto_value(value: Value) -> "device_pb2.Value":
+def _value_to_proto_value(value: Value, *, for_write: bool = False) -> "device_pb2.Value":
     """Convert Python value to proto Value message."""
     proto_value = device_pb2.Value()
 
@@ -122,6 +125,11 @@ def _value_to_proto_value(value: Value) -> "device_pb2.Value":
     elif isinstance(value, bytes):
         proto_value.raw = value
     elif isinstance(value, dict):
+        if for_write:
+            raise NotImplementedError(
+                "Alarm writes are not supported via gRPC — the DPM server does not handle "
+                "alarm settings over this protocol. Use the DPM/HTTP or DMQ backend instead."
+            )
         _dict_to_proto_alarm(value, proto_value)
     elif isinstance(value, (list, tuple)):
         if all(isinstance(v, (int, float)) for v in value):
@@ -223,8 +231,10 @@ def _proto_value_to_python(proto_value: "device_pb2.Value") -> tuple[Value, Valu
         }, ValueType.DIGITAL_ALARM
     elif value_type == "basicStatus":
         return dict(proto_value.basicStatus.value), ValueType.BASIC_STATUS
+    elif value_type is None:
+        raise ValueError("Proto Value has no value set (empty oneof)")
     else:
-        return None, ValueType.SCALAR  # type: ignore[return-value]  # None signals missing value
+        raise ValueError(f"Unknown proto value type: {value_type!r}")
 
 
 def _proto_timestamp_to_datetime(ts: "timestamp_pb2.Timestamp") -> Optional[datetime]:
@@ -252,12 +262,17 @@ def _proto_status_to_codes(status: "status_pb2.Status") -> tuple[int, int, Optio
     )
 
 
-def _reply_to_reading(reply, drfs: list[str]) -> Optional[Reading]:
-    """Convert a single ReadingReply to a Reading, or None if unprocessable."""
+def _reply_to_readings(reply, drfs: list[str]) -> list[Reading]:
+    """Convert a ReadingReply to a list of Readings.
+
+    The server may pack multiple (value, timestamp) pairs into a single
+    Readings message for high-frequency buffered data (see
+    DPMListGRPC.sendReply(WhatDaq, double[], long[], long)).
+    """
     index = reply.index
     if index >= len(drfs):
         logger.warning(f"Received reply for unknown index {index}")
-        return None
+        return []
 
     drf = drfs[index]
     now = datetime.now()
@@ -265,31 +280,38 @@ def _reply_to_reading(reply, drfs: list[str]) -> Optional[Reading]:
 
     if value_field == "status":
         facility, error, message = _proto_status_to_codes(reply.status)
-        return Reading(
-            drf=drf,
-            value_type=ValueType.SCALAR,
-            facility_code=facility,
-            error_code=error if error != 0 else ERR_RETRY,
-            message=message or "gRPC error",
-            timestamp=now,
-        )
+        # Status-only reply with code 0 means "success but no data" which is
+        # an error for a data acquisition call (downstream expects a value).
+        return [
+            Reading(
+                drf=drf,
+                value_type=ValueType.SCALAR,
+                facility_code=facility,
+                error_code=error if error != 0 else ERR_RETRY,
+                message=message or "gRPC error",
+                timestamp=now,
+            )
+        ]
     elif value_field == "readings":
         reading_list = reply.readings.reading
-        if reading_list:
-            rd = reading_list[0]
+        results = []
+        for rd in reading_list:
             ts = _proto_timestamp_to_datetime(rd.timestamp)
             value, value_type = _proto_value_to_python(rd.data)
             facility, error, message = _proto_status_to_codes(rd.status)
-            return Reading(
-                drf=drf,
-                value_type=value_type,
-                value=value,
-                facility_code=facility,
-                error_code=error,
-                message=message,
-                timestamp=ts or now,
+            results.append(
+                Reading(
+                    drf=drf,
+                    value_type=value_type,
+                    value=value,
+                    facility_code=facility,
+                    error_code=error,
+                    message=message,
+                    timestamp=ts or now,
+                )
             )
-    return None
+        return results
+    return []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -358,9 +380,10 @@ class _DaqCore:
                 if index >= len(drfs) or results[index] is not None:
                     continue
 
-                reading = _reply_to_reading(reply, drfs)
-                if reading is not None:
-                    results[index] = reading
+                readings = _reply_to_readings(reply, drfs)
+                if readings:
+                    # For one-shot reads, keep the last reading per index
+                    results[index] = readings[-1]
                     received_count += 1
 
                 if received_count >= expected_count:
@@ -422,7 +445,7 @@ class _DaqCore:
             try:
                 setting = DAQ_pb2.Setting()
                 setting.device = drf
-                setting.value.CopyFrom(_value_to_proto_value(value))
+                setting.value.CopyFrom(_value_to_proto_value(value, for_write=True))
                 valid_items.append((i, drf, setting))
             except ValueError as e:
                 logger.error(f"Failed to convert value for {drf}: {e}")
@@ -499,7 +522,14 @@ class _DaqCore:
         stop_check,
         error_fn,
     ):
-        """Long-running stream with reconnection on UNAVAILABLE."""
+        """Long-running stream with reconnection on errors.
+
+        Normal stream completion (server onCompleted) is treated as a graceful
+        end — the subscription stops without reconnecting. This is the correct
+        behavior for @I (immediate) events and also safe for periodic events
+        since the server never calls onCompleted on periodic streams. Network
+        errors and UNAVAILABLE trigger exponential backoff reconnection.
+        """
         assert self._stub is not None, "Not connected"
         backoff = _RECONNECT_INITIAL_DELAY
 
@@ -520,14 +550,16 @@ class _DaqCore:
                         call.cancel()
                         return
 
-                    reading = _reply_to_reading(reply, drfs)
-                    if reading is not None:
+                    for reading in _reply_to_readings(reply, drfs):
                         dispatch_fn(reading)
                         backoff = _RECONNECT_INITIAL_DELAY  # reset on success
 
-                # Stream ended normally (server closed) — retry
+                # Stream ended normally (server called onCompleted). This
+                # happens for @I events and on graceful server shutdown.
+                # Do NOT reconnect — treat as subscription end.
                 if not stop_check():
-                    logger.warning("gRPC stream ended, reconnecting...")
+                    logger.info("gRPC stream completed normally, subscription ending")
+                return
 
             except asyncio.CancelledError:
                 return
@@ -831,11 +863,7 @@ class GRPCBackend(Backend):
     @property
     def principal(self) -> Optional[str]:
         if self._auth is not None:
-            try:
-                return self._auth.principal
-            except ValueError:
-                logger.warning("Failed to extract principal from JWT token")
-                return None
+            return self._auth.principal
         return None
 
     @property
@@ -923,6 +951,13 @@ class GRPCBackend(Backend):
         Creates an asyncio.Task on the shared reactor loop. The handle uses
         a bounded FIFO queue (default 10000); on overflow, newest readings
         are dropped with a warning.
+
+        Note: data may be dropped at two independent levels under high load:
+        1. Server-side: DPM drops readings when gRPC flow control signals the
+           client is slow (no notification to client).
+        2. Client-side: queue overflow drops newest readings with a log warning.
+        Monitor logs for 'queue full' warnings. Use callbacks for lowest-latency
+        consumption, or increase consumer throughput.
         """
         if not GRPC_AVAILABLE:
             raise ImportError("grpc package required for streaming")

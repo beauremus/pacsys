@@ -5,7 +5,8 @@ from typing import Optional
 def parse_event(parse_str: Optional[str]):
     if parse_str is None:
         return None
-    assert len(parse_str) > 0
+    if not parse_str:
+        raise ValueError("event string must not be empty")
     char = parse_str[0].upper()
     if char == "U":
         return DefaultEvent(parse_str, char)
@@ -37,13 +38,15 @@ class DRF_EVENT:
 
 class DefaultEvent(DRF_EVENT):
     def __init__(self, raw_string="U", mode="U"):
-        assert raw_string == mode == "U"
+        if raw_string != "U" or mode != "U":
+            raise ValueError(f"DefaultEvent requires raw_string='U' and mode='U', got {raw_string!r}, {mode!r}")
         super().__init__(raw_string, mode)
 
 
 class ImmediateEvent(DRF_EVENT):
     def __init__(self, raw_string="I", mode="I"):
-        assert raw_string == mode == "I"
+        if raw_string != "I" or mode != "I":
+            raise ValueError(f"ImmediateEvent requires raw_string='I' and mode='I', got {raw_string!r}, {mode!r}")
         super().__init__(raw_string, mode)
 
 

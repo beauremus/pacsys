@@ -9,8 +9,8 @@ class DRF_PROPERTY(Enum):
     ANALOG = "@"
     DIGITAL = "$"
     DESCRIPTION = "~"
-    INDEX = ("^",)
-    LONG_NAME = ("#",)
+    INDEX = "^"
+    LONG_NAME = "#"
     ALARM_LIST_NAME = "!"
 
 

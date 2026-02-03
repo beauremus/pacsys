@@ -22,10 +22,10 @@ import pytest
 from pacsys.backends import Backend, timestamp_from_millis
 from pacsys.backends.dpm_http import (
     DPMHTTPBackend,
-    _ensure_immediate_event,
     _reply_to_value_and_type,
     _device_info_to_meta,
 )
+from pacsys.drf_utils import ensure_immediate_event as _ensure_immediate_event
 from pacsys.types import BackendCapability, Reading, ValueType
 from pacsys.errors import DeviceError, AuthenticationError
 from pacsys.acnet.errors import make_error

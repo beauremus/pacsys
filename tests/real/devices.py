@@ -359,6 +359,32 @@ requires_kerberos = pytest.mark.skipif(
     reason="Valid Kerberos credentials required (run kinit first)",
 )
 
+
+# =============================================================================
+# SSH Server Config & Availability
+# =============================================================================
+
+SSH_JUMP_HOST = os.environ.get("PACSYS_TEST_SSH_JUMP", "")
+SSH_DEST_HOST = os.environ.get("PACSYS_TEST_SSH_DEST", "")
+
+
+def ssh_jump_available() -> bool:
+    """Check if SSH jump host is configured and reachable."""
+    if not SSH_JUMP_HOST:
+        return False
+    try:
+        sock = socket.create_connection((SSH_JUMP_HOST, 22), timeout=3.0)
+        sock.close()
+        return True
+    except (socket.timeout, ConnectionRefusedError, OSError, socket.gaierror):
+        return False
+
+
+requires_ssh = pytest.mark.skipif(
+    not SSH_JUMP_HOST or not SSH_DEST_HOST,
+    reason="SSH tests require PACSYS_TEST_SSH_JUMP and PACSYS_TEST_SSH_DEST env vars (see tests/real/.env.ssh)",
+)
+
 requires_write_enabled = pytest.mark.skipif(
     not os.environ.get("PACSYS_TEST_WRITE"),
     reason="Set PACSYS_TEST_WRITE=1 to enable write tests",

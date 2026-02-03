@@ -9,7 +9,6 @@ for a block of code), or via the thread-local context stack.
 from __future__ import annotations
 
 import threading
-from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Optional
 
@@ -43,11 +42,6 @@ class Verify:
     readback: Optional[str] = None
     always: bool = False
 
-    @classmethod
-    def defaults(cls, **kwargs) -> Verify:
-        """Create Verify with custom defaults."""
-        return cls(**kwargs)
-
     def __enter__(self) -> Verify:
         _push_verify(self)
         return self
@@ -72,16 +66,6 @@ def _pop_verify() -> None:
     stack = getattr(_local, "stack", None)
     if stack:
         stack.pop()
-
-
-@contextmanager
-def verify_context(verify: Verify):
-    """Context manager that pushes a Verify onto the thread-local stack."""
-    _push_verify(verify)
-    try:
-        yield verify
-    finally:
-        _pop_verify()
 
 
 def get_active_verify() -> Optional[Verify]:
@@ -127,4 +111,4 @@ def values_match(a: Value, b: Value, tolerance: float = 0.0) -> bool:
     return a == b
 
 
-__all__ = ["Verify", "verify_context", "get_active_verify", "resolve_verify", "values_match"]
+__all__ = ["Verify", "get_active_verify", "resolve_verify", "values_match"]

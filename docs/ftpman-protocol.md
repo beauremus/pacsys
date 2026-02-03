@@ -236,9 +236,6 @@ sequenceDiagram
     C->>FE: ACNET cancel (stop)
 ```
 
-
-
-
 ## Typecodes
 
 | Typecode | Operation | Reply Mode | Description |

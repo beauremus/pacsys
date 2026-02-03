@@ -31,6 +31,7 @@ dependencies = [
     "grpcio",
     "pika",
     "gssapi",
+    "paramiko",
 ]
 requires-python = ">=3.9"
 
