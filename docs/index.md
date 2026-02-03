@@ -113,7 +113,9 @@ See the [Device API guide](guide/device-api.md) for full documentation.
 ## Installation
 
 ```bash
-pip install pacsys
+# Use development install while we are still in beta
+git clone https://github.com/fast-iota/pacsys
+pip install -e pacsys
 ```
 
 ## Next Steps

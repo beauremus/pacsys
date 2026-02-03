@@ -82,8 +82,8 @@ Node addresses are 16-bit values: `(trunk << 8) | node`
 
 Examples:
 
-- `0x0A06` = trunk 10, node 6 (displayed as "A06" in hex)
-- `0x09CC` = trunk 9, node 204 (displayed as "9CC")
+- `0x0A06` = trunk 10, node 6
+- `0x09CC` = trunk 9, node 204
 
 Trunk 230 (`0xE6`) is reserved for pseudo-nodes (open-access clients).
 
@@ -95,7 +95,7 @@ Task names use RAD50, a base-40 encoding that fits 6 characters into 32 bits:
 from pacsys.acnet import rad50
 
 encoded = rad50.encode("DPMD")    # -> 0x19001B8D
-name = rad50.decode(0x19001B8D)   # -> "DPMD  "
+name = rad50.decode(0x19001B8D)   # -> "DPMD  " (note spaces)
 ```
 
 Character set (40 chars): <code> ABCDEFGHIJKLMNOPQRSTUVWXYZ$.%0123456789</code>
@@ -104,15 +104,14 @@ Character set (40 chars): <code> ABCDEFGHIJKLMNOPQRSTUVWXYZ$.%0123456789</code>
 
 The `status` field uses facility-error encoding:
 
-- Low byte: facility code (unsigned)
+- Low byte: facility code (always positive)
 - High byte: error code (signed)
-- Negative = failure, zero = success, positive = conditional success (e.g., pending)
+- Negative = failure, zero = success, positive = status or warning (e.g., pending)
 
 ## Using pacsys.acnet
 
 ```python
 from pacsys.acnet import AcnetPacket
-from pacsys.acnet.constants import ACNET_PORT
 
 packet = AcnetPacket.parse(raw_bytes)
 
@@ -163,12 +162,12 @@ The byte-swap rule means:
 
 ## Common Tasks
 
-| Task Name | RAD50 | Purpose |
-|-----------|-------|---------|
-| DPMD | `0x19001B8D` | Data Pool Manager daemon |
-| RETDAT | `0x193C715C` | Return data (frontend) |
-| SETDAT | `0x193C779C` | Set data (frontend) |
-| FTPMAN | | Fast Time Plot manager (frontend) - see [FTPMAN Protocol](ftpman-protocol.md) |
+| Task Name | Purpose |
+|-----------|---------|
+| DPMD | Data Pool Manager daemon |
+| RETDAT | Return data (frontend) |
+| SETDAT | Set data (frontend) |
+| FTPMAN | Fast Time Plot manager (frontend) - see [FTPMAN Protocol](ftpman-protocol.md) |
 
 ## Further Reading
 
