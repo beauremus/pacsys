@@ -57,19 +57,19 @@ ACNETD_DATA = 3
 TCP_HANDSHAKE = b"RAW\r\n\r\n"
 
 # acnetd command codes (official names from acnetd CommandList enum)
-CMD_KEEPALIVE = 0               # cmdKeepAlive
-CMD_CONNECT = 1                 # cmdConnect (8-bit task ID)
-CMD_DISCONNECT = 3              # cmdDisconnect
-CMD_SEND = 4                    # cmdSend (unsolicited message)
-CMD_RECEIVE_REQUESTS = 6        # cmdReceiveRequests
-CMD_SEND_REPLY = 7              # cmdSendReply
-CMD_CANCEL = 8                  # cmdCancel
-CMD_REQUEST_ACK = 9             # cmdRequestAck
-CMD_NAME_LOOKUP = 11            # cmdNameLookup (name -> trunk/node)
-CMD_NODE_LOOKUP = 12            # cmdNodeLookup (trunk/node -> name)
-CMD_LOCAL_NODE = 13             # cmdLocalNode
-CMD_CONNECT_EXT = 16            # cmdConnectExt (16-bit task ID)
-CMD_SEND_REQUEST_TIMEOUT = 18   # cmdSendRequestWithTimeout
+CMD_KEEPALIVE = 0  # cmdKeepAlive
+CMD_CONNECT = 1  # cmdConnect (8-bit task ID)
+CMD_DISCONNECT = 3  # cmdDisconnect
+CMD_SEND = 4  # cmdSend (unsolicited message)
+CMD_RECEIVE_REQUESTS = 6  # cmdReceiveRequests
+CMD_SEND_REPLY = 7  # cmdSendReply
+CMD_CANCEL = 8  # cmdCancel
+CMD_REQUEST_ACK = 9  # cmdRequestAck
+CMD_NAME_LOOKUP = 11  # cmdNameLookup (name -> trunk/node)
+CMD_NODE_LOOKUP = 12  # cmdNodeLookup (trunk/node -> name)
+CMD_LOCAL_NODE = 13  # cmdLocalNode
+CMD_CONNECT_EXT = 16  # cmdConnectExt (16-bit task ID)
+CMD_SEND_REQUEST_TIMEOUT = 18  # cmdSendRequestWithTimeout
 
 # Type aliases for handlers
 ReplyHandler = type(lambda reply: None)

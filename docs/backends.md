@@ -174,7 +174,7 @@ with pacsys.grpc(auth=auth) as backend:
 
 ### Write Permissions (JWT)
 
-JWT tokens are introspected server-side via a Keycloak endpoint. Your token's `realm_access.roles` determine which devices you can write to. Roles are mapped to ACNET console classes (e.g. `MCR`, `STA`, ...). Same bitwise check logic is applied as for DPM/HTTP.
+JWT tokens are introspected server-side via a Keycloak endpoint. Your token's `realm_access.roles` determine which devices you can write to. Roles are mapped to ACNET console classes (e.g. `MCR`, `ASTA`, ...). Same bitwise check logic is applied as for DPM/HTTP.
 
 ---
 
@@ -198,7 +198,7 @@ sequenceDiagram
 
 - **No authentication**: Anyone can read
 - **Read-only**: No write or streaming support
-- **Simple**: Just HTTP requests
+- **Simple**: Just HTTP requests. No writes. No streaming.
 - **Slower**: HTTP overhead vs binary protocol
 
 ### Usage
@@ -213,9 +213,7 @@ with pacsys.acl() as backend:
 
 ### When to Use
 
-- Quick one-off reads without setup
-- Scripts that only need read access
-- Environments where Kerberos isn't available
+- Quick one-off reads when there are difficulties installing dependencies
 
 ---
 
