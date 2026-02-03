@@ -53,15 +53,30 @@ from tests.devices import (
 )
 
 
+_MOCK_GSSAPI = MockGSSAPIModule()
+
+
 def _create_mock_auth():
     """Create a mock KerberosAuth for testing without real Kerberos.
 
     Returns a KerberosAuth instance that uses MockGSSAPIModule.
     """
-    with mock.patch.dict("sys.modules", {"gssapi": MockGSSAPIModule()}):
+    with mock.patch.dict("sys.modules", {"gssapi": _MOCK_GSSAPI}):
         from pacsys.auth import KerberosAuth
 
         return KerberosAuth()
+
+
+@contextmanager
+def _mock_gssapi():
+    """Keep gssapi mocked for the duration of a block.
+
+    Needed because KerberosAuth._get_credentials() re-imports gssapi on every
+    call (e.g. via auth.principal), so the mock must be active whenever a
+    DMQBackend is constructed or uses the auth object.
+    """
+    with mock.patch.dict("sys.modules", {"gssapi": _MOCK_GSSAPI}):
+        yield
 
 
 def _mock_gss_context():
@@ -381,7 +396,7 @@ def _mock_dmq_backend(replies=None, routing_keys=None, **kwargs):
     """
     factory, mock_conn = create_mock_select_connection_factory(replies or [], routing_keys)
     with (
-        mock.patch.dict("sys.modules", {"gssapi": MockGSSAPIModule()}),
+        _mock_gssapi(),
         mock.patch.object(SelectConnection, "__new__", side_effect=factory),
         mock.patch.object(DMQBackend, "_create_gss_context", return_value=_mock_gss_context()),
     ):
@@ -400,7 +415,7 @@ def _mock_dmq_write_backend(write_response_factory=None, **kwargs):
     """
     factory, mock_conn = create_write_select_connection_factory(write_response_factory)
     with (
-        mock.patch.dict("sys.modules", {"gssapi": MockGSSAPIModule()}),
+        _mock_gssapi(),
         mock.patch("pika.BlockingConnection"),
         mock.patch.object(SelectConnection, "__new__", side_effect=factory),
         mock.patch.object(DMQBackend, "_create_gss_context", return_value=_mock_gss_context()),
@@ -491,11 +506,12 @@ class TestDMQBackendRead:
 
     def test_get_many_empty_list(self):
         """Test get_many with empty list returns empty list."""
-        backend = DMQBackend(host="localhost", auth=_create_mock_auth())
-        try:
-            assert backend.get_many([]) == []
-        finally:
-            backend.close()
+        with _mock_gssapi():
+            backend = DMQBackend(host="localhost", auth=_create_mock_auth())
+            try:
+                assert backend.get_many([]) == []
+            finally:
+                backend.close()
 
     def test_get_many_same_device_different_properties(self):
         """Regression: routing key matching when ref_id is missing."""
@@ -544,10 +560,11 @@ class TestDMQBackendRead:
 
     def test_read_closed_backend(self):
         """Test that read on closed backend raises RuntimeError."""
-        backend = DMQBackend(host="localhost", auth=_create_mock_auth())
-        backend.close()
-        with pytest.raises(RuntimeError, match="closed"):
-            backend.read(TEMP_DEVICE)
+        with _mock_gssapi():
+            backend = DMQBackend(host="localhost", auth=_create_mock_auth())
+            backend.close()
+            with pytest.raises(RuntimeError, match="closed"):
+                backend.read(TEMP_DEVICE)
 
 
 # =============================================================================
@@ -597,12 +614,13 @@ class TestDMQBackendSubscribe:
 
     def test_subscribe_empty_drfs_raises(self):
         """Test that subscribe with empty drfs raises ValueError."""
-        backend = DMQBackend(host="localhost", auth=_create_mock_auth())
-        try:
-            with pytest.raises(ValueError, match="drfs cannot be empty"):
-                backend.subscribe([])
-        finally:
-            backend.close()
+        with _mock_gssapi():
+            backend = DMQBackend(host="localhost", auth=_create_mock_auth())
+            try:
+                with pytest.raises(ValueError, match="drfs cannot be empty"):
+                    backend.subscribe([])
+            finally:
+                backend.close()
 
     def test_subscribe_callback_cannot_iterate(self):
         """Test that callback-mode subscription cannot use readings()."""
@@ -762,11 +780,12 @@ class TestDMQBackendWrite:
 
     def test_write_many_empty_list(self):
         """Test that write_many() with empty list returns empty list."""
-        backend = DMQBackend(host="localhost", auth=_create_mock_auth())
-        try:
-            assert backend.write_many([]) == []
-        finally:
-            backend.close()
+        with _mock_gssapi():
+            backend = DMQBackend(host="localhost", auth=_create_mock_auth())
+            try:
+                assert backend.write_many([]) == []
+            finally:
+                backend.close()
 
     def test_write_many_returns_results(self):
         """Test that write_many() returns list of WriteResult."""
@@ -822,6 +841,7 @@ class TestDMQBackendWrite:
         """DMQ server rejects BinarySample; writing bytes must fail."""
         factory, mock_conn = create_write_select_connection_factory()
         with (
+            _mock_gssapi(),
             mock.patch("pika.BlockingConnection"),
             mock.patch.object(SelectConnection, "__new__", side_effect=factory),
         ):
@@ -841,6 +861,7 @@ class TestDMQBackendWrite:
             raise RuntimeError("Kerberos ticket expired")
 
         with (
+            _mock_gssapi(),
             mock.patch("pika.BlockingConnection"),
             mock.patch.object(SelectConnection, "__new__", side_effect=factory),
             mock.patch.object(DMQBackend, "_create_gss_context", side_effect=failing_gss),
@@ -1084,15 +1105,16 @@ class TestDMQBackendLifecycle:
 
     def test_context_manager(self):
         """Test backend as context manager."""
-        with mock.patch.object(DMQBackend, "_create_gss_context", return_value=_mock_gss_context()):
+        with _mock_gssapi(), mock.patch.object(DMQBackend, "_create_gss_context", return_value=_mock_gss_context()):
             with DMQBackend(host="localhost", auth=_create_mock_auth()) as backend:
                 assert backend is not None
 
     def test_close_idempotent(self):
         """Test that close() can be called multiple times."""
-        backend = DMQBackend(host="localhost", auth=_create_mock_auth())
-        backend.close()
-        backend.close()  # Should not raise
+        with _mock_gssapi():
+            backend = DMQBackend(host="localhost", auth=_create_mock_auth())
+            backend.close()
+            backend.close()  # Should not raise
 
     def test_stop_streaming(self):
         """Test stop_streaming() stops all subscriptions."""
