@@ -75,10 +75,10 @@ class TestSSHHop:
         hop = SSHHop("host")  # auth_method="gssapi" by default, no username
         assert hop.effective_username == "kerbuser"
 
-    def test_effective_username_password_fallback(self):
+    @patch("os.getlogin", return_value="ciuser")
+    def test_effective_username_password_fallback(self, mock_login):
         hop = SSHHop("host", auth_method="password", password="pw")
-        # Should use os.getlogin(), not gssapi
-        assert hop.effective_username  # just check it returns something
+        assert hop.effective_username == "ciuser"
 
 
 # ---------------------------------------------------------------------------
