@@ -151,6 +151,7 @@ class TestHelperFunctions:
         reply.tries_now = 0
         value, vtype = _reply_to_value_and_type(reply)
         assert vtype == ValueType.ANALOG_ALARM
+        assert isinstance(value, dict)
         assert value["minimum"] == 10.0
         assert value["maximum"] == 90.0
         assert value["alarm_enable"] is True
@@ -171,6 +172,7 @@ class TestHelperFunctions:
         reply.tries_now = 2
         value, vtype = _reply_to_value_and_type(reply)
         assert vtype == ValueType.ANALOG_ALARM
+        assert isinstance(value, dict)
         assert value["minimum"] == -50.5
         assert value["maximum"] == 150.75
         assert value["alarm_enable"] is True
@@ -193,6 +195,7 @@ class TestHelperFunctions:
         reply.tries_now = 0
         value, vtype = _reply_to_value_and_type(reply)
         assert vtype == ValueType.DIGITAL_ALARM
+        assert isinstance(value, dict)
         assert value["nominal"] == 0xFF
         assert value["mask"] == 0x0F
 
@@ -212,6 +215,7 @@ class TestHelperFunctions:
         reply.tries_now = 5
         value, vtype = _reply_to_value_and_type(reply)
         assert vtype == ValueType.DIGITAL_ALARM
+        assert isinstance(value, dict)
         assert value["nominal"] == 0xABCD
         assert value["mask"] == 0x00FF
         assert value["alarm_enable"] is True
@@ -228,6 +232,7 @@ class TestHelperFunctions:
         reply.ready = True
         value, vtype = _reply_to_value_and_type(reply)
         assert vtype == ValueType.BASIC_STATUS
+        assert isinstance(value, dict)
         assert value["on"] is True
         assert value["ready"] is True
 
@@ -244,6 +249,7 @@ class TestHelperFunctions:
         reply.ramp = True
         value, vtype = _reply_to_value_and_type(reply)
         assert vtype == ValueType.BASIC_STATUS
+        assert isinstance(value, dict)
         assert value["on"] is True
         assert value["ready"] is False
         assert value["remote"] is True
@@ -258,6 +264,7 @@ class TestHelperFunctions:
         reply.remote = True
         value, vtype = _reply_to_value_and_type(reply)
         assert vtype == ValueType.BASIC_STATUS
+        assert isinstance(value, dict)
         assert value["on"] is False
         assert value["remote"] is True
         assert "ready" not in value

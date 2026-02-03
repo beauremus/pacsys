@@ -29,7 +29,7 @@ from pacsys.backends.dmq import (
 )
 from pacsys.drf_utils import prepare_for_write
 from pacsys.errors import AuthenticationError, DeviceError
-from pacsys.resources import (
+from pacsys.backends.dmq_protocol import (
     AnalogAlarmSample_reply,
     BasicControlSample_reply,
     BasicStatusSample_reply,

@@ -26,7 +26,7 @@ from pacsys.acnet.errors import ERR_OK, ERR_RETRY, ERR_TIMEOUT, FACILITY_ACNET
 from pacsys.auth import Auth, KerberosAuth
 from pacsys.backends import Backend, timestamp_from_millis
 from pacsys.errors import AuthenticationError, DeviceError
-from pacsys.resources import (
+from pacsys.backends.dmq_protocol import (
     ReadingRequest_request,
     SettingRequest_request,
     unmarshal_reply,
