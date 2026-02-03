@@ -1384,13 +1384,13 @@ class DMQBackend(Backend):
 
         # Skip heartbeats and outbound settings (S.# is the client's own
         # message echoed back via the queue binding — server responses use R.#)
-        rk = method.routing_key
+        rk: str = method.routing_key  # type: ignore[assignment]
         if rk == "Q" or rk.startswith("S."):
             return
 
         # Extract correlation_id early (before unmarshal) so we can fail
         # the specific request if unmarshal throws
-        corr_id = properties.correlation_id if properties else None
+        corr_id = properties.correlation_id
 
         # Parse reply
         try:
@@ -1852,7 +1852,7 @@ class DMQBackend(Backend):
     ) -> None:
         """Handle incoming message for subscription (runs in IO thread)."""
         channel.basic_ack(method.delivery_tag)
-        result = _resolve_reply(method.routing_key, body, sub.drfs, sub.drf_to_idx)
+        result = _resolve_reply(method.routing_key, body, sub.drfs, sub.drf_to_idx)  # type: ignore[arg-type]
         if result is None:
             return
         reply, idx, ref_id = result

@@ -29,7 +29,9 @@ jobs:
         run: ruff format --check pacsys/ tests/
 
       - name: Type check
-        run: ty check --python $(which python)
+        run: |
+          SITE=$(python -c "import sysconfig; print(sysconfig.get_path('purelib'))")
+          ty check --extra-search-path "$SITE"
 
   test:
     runs-on: ubuntu-latest
