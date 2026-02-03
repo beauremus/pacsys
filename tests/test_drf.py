@@ -1,5 +1,6 @@
 import pytest
 
+from pacsys.drf_utils import ensure_immediate_event
 from pacsys.drf3 import (
     ARRAY_RANGE,
     ClockEvent,
@@ -170,3 +171,17 @@ def test_drf_device_parse(drf, expected_canonical):
 
 def test_get_qualified_device():
     assert get_qualified_device("N:I2B1RI", DRF_PROPERTY.SETTING) == "N_I2B1RI"
+
+
+@pytest.mark.parametrize(
+    "drf,expected",
+    [
+        ("M:OUTTMP", "M:OUTTMP@I"),
+        ("B:HS23T[0:10]", "B:HS23T[0:10]@I"),
+        ("M:OUTTMP@p,1000", "M:OUTTMP@p,1000"),
+        ("M:OUTTMP@E,0F", "M:OUTTMP@E,0F"),
+        ("M:OUTTMP@I", "M:OUTTMP@I"),
+    ],
+)
+def test_ensure_immediate_event(drf, expected):
+    assert ensure_immediate_event(drf) == expected

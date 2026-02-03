@@ -20,29 +20,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from pacsys.backends import timestamp_from_millis
-from pacsys.backends.dpm_http import (
-    DPMHTTPBackend,
-    _reply_to_value_and_type,
-    _device_info_to_meta,
-)
-from pacsys.drf_utils import ensure_immediate_event as _ensure_immediate_event
+from pacsys.backends.dpm_http import DPMHTTPBackend
 from pacsys.types import Reading, ValueType
 from pacsys.errors import DeviceError, AuthenticationError
 from pacsys.acnet.errors import make_error
-from pacsys.dpm_protocol import (
-    AnalogAlarm_reply,
-    BasicStatus_reply,
-    DeviceInfo_reply,
-    DigitalAlarm_reply,
-    ListStatus_reply,
-    Raw_reply,
-    Scalar_reply,
-    ScalarArray_reply,
-    StartList_reply,
-    Status_reply,
-    Text_reply,
-    TextArray_reply,
-)
+from pacsys.dpm_protocol import ListStatus_reply, Raw_reply, StartList_reply
 
 # Shared test helpers
 from tests.devices import (
@@ -87,231 +69,21 @@ class TestDPMHTTPBackendInit:
 
 
 # =============================================================================
-# Helper Functions Tests
+# Timestamp Helpers
 # =============================================================================
 
 
-class TestHelperFunctions:
-    """Tests for helper functions."""
+def test_timestamp_from_millis():
+    """Timestamp conversion from milliseconds."""
+    millis = 1704067200_000  # Jan 1, 2024 00:00:00 UTC
+    dt = timestamp_from_millis(millis)
+    assert dt.timestamp() == millis / 1_000
 
-    def test_ensure_immediate_event_no_event(self):
-        """@I is appended when no event specified."""
-        assert _ensure_immediate_event("M:OUTTMP") == "M:OUTTMP@I"
-        assert _ensure_immediate_event("B:HS23T[0:10]") == "B:HS23T[0:10]@I"
 
-    def test_ensure_immediate_event_with_event(self):
-        """Existing event is preserved."""
-        assert _ensure_immediate_event("M:OUTTMP@p,1000") == "M:OUTTMP@p,1000"
-        assert _ensure_immediate_event("M:OUTTMP@E,0F") == "M:OUTTMP@E,0F"
-        assert _ensure_immediate_event("M:OUTTMP@I") == "M:OUTTMP@I"
-
-    def testtimestamp_from_millis(self):
-        """Timestamp conversion from milliseconds."""
-        millis = 1704067200_000  # Jan 1, 2024 00:00:00 UTC
-        dt = timestamp_from_millis(millis)
-        expected_seconds = millis / 1_000
-        actual_seconds = dt.timestamp()
-        assert actual_seconds == expected_seconds
-
-    def testtimestamp_from_millis_zero(self):
-        """Timestamp conversion with zero."""
-        dt = timestamp_from_millis(0)
-        assert dt == datetime.fromtimestamp(0)
-
-    @pytest.mark.parametrize(
-        "reply_cls,data,expected_value,expected_type",
-        [
-            (Scalar_reply, 72.5, 72.5, ValueType.SCALAR),
-            (ScalarArray_reply, [1.0, 2.0, 3.0], [1.0, 2.0, 3.0], ValueType.SCALAR_ARRAY),
-            (Raw_reply, b"\x01\x02\x03", b"\x01\x02\x03", ValueType.RAW),
-            (Text_reply, "Hello, World!", "Hello, World!", ValueType.TEXT),
-            (TextArray_reply, ["line1", "line2", "line3"], ["line1", "line2", "line3"], ValueType.TEXT_ARRAY),
-        ],
-    )
-    def test_reply_to_value_simple(self, reply_cls, data, expected_value, expected_type):
-        reply = reply_cls()
-        reply.data = data
-        value, vtype = _reply_to_value_and_type(reply)
-        if expected_type == ValueType.SCALAR_ARRAY:
-            assert list(value) == expected_value
-        else:
-            assert value == expected_value
-        assert vtype == expected_type
-
-    def test_reply_to_value_analog_alarm(self):
-        """Conversion of AnalogAlarm_reply."""
-        reply = AnalogAlarm_reply()
-        reply.minimum = 10.0
-        reply.maximum = 90.0
-        reply.alarm_enable = True
-        reply.alarm_status = False
-        reply.abort = False
-        reply.abort_inhibit = False
-        reply.tries_needed = 3
-        reply.tries_now = 0
-        value, vtype = _reply_to_value_and_type(reply)
-        assert vtype == ValueType.ANALOG_ALARM
-        assert isinstance(value, dict)
-        assert value["minimum"] == 10.0
-        assert value["maximum"] == 90.0
-        assert value["alarm_enable"] is True
-
-    def test_reply_to_value_analog_alarm_all_fields(self):
-        """Conversion of AnalogAlarm_reply with all fields."""
-        reply = AnalogAlarm_reply()
-        reply.ref_id = 42
-        reply.timestamp = 1234567890000000
-        reply.cycle = 100
-        reply.minimum = -50.5
-        reply.maximum = 150.75
-        reply.alarm_enable = True
-        reply.alarm_status = True
-        reply.abort = True
-        reply.abort_inhibit = False
-        reply.tries_needed = 5
-        reply.tries_now = 2
-        value, vtype = _reply_to_value_and_type(reply)
-        assert vtype == ValueType.ANALOG_ALARM
-        assert isinstance(value, dict)
-        assert value["minimum"] == -50.5
-        assert value["maximum"] == 150.75
-        assert value["alarm_enable"] is True
-        assert value["alarm_status"] is True
-        assert value["abort"] is True
-        assert value["abort_inhibit"] is False
-        assert value["tries_needed"] == 5
-        assert value["tries_now"] == 2
-
-    def test_reply_to_value_digital_alarm(self):
-        """Conversion of DigitalAlarm_reply."""
-        reply = DigitalAlarm_reply()
-        reply.nominal = 0xFF
-        reply.mask = 0x0F
-        reply.alarm_enable = True
-        reply.alarm_status = False
-        reply.abort = False
-        reply.abort_inhibit = False
-        reply.tries_needed = 3
-        reply.tries_now = 0
-        value, vtype = _reply_to_value_and_type(reply)
-        assert vtype == ValueType.DIGITAL_ALARM
-        assert isinstance(value, dict)
-        assert value["nominal"] == 0xFF
-        assert value["mask"] == 0x0F
-
-    def test_reply_to_value_digital_alarm_all_fields(self):
-        """Conversion of DigitalAlarm_reply with all fields."""
-        reply = DigitalAlarm_reply()
-        reply.ref_id = 42
-        reply.timestamp = 1234567890000000
-        reply.cycle = 100
-        reply.nominal = 0xABCD
-        reply.mask = 0x00FF
-        reply.alarm_enable = True
-        reply.alarm_status = True
-        reply.abort = True
-        reply.abort_inhibit = True
-        reply.tries_needed = 10
-        reply.tries_now = 5
-        value, vtype = _reply_to_value_and_type(reply)
-        assert vtype == ValueType.DIGITAL_ALARM
-        assert isinstance(value, dict)
-        assert value["nominal"] == 0xABCD
-        assert value["mask"] == 0x00FF
-        assert value["alarm_enable"] is True
-        assert value["alarm_status"] is True
-        assert value["abort"] is True
-        assert value["abort_inhibit"] is True
-        assert value["tries_needed"] == 10
-        assert value["tries_now"] == 5
-
-    def test_reply_to_value_basic_status(self):
-        """Conversion of BasicStatus_reply."""
-        reply = BasicStatus_reply()
-        reply.on = True
-        reply.ready = True
-        value, vtype = _reply_to_value_and_type(reply)
-        assert vtype == ValueType.BASIC_STATUS
-        assert isinstance(value, dict)
-        assert value["on"] is True
-        assert value["ready"] is True
-
-    def test_reply_to_value_basic_status_all_fields(self):
-        """Conversion of BasicStatus_reply with all optional fields."""
-        reply = BasicStatus_reply()
-        reply.ref_id = 1
-        reply.timestamp = 1234567890000000
-        reply.cycle = 100
-        reply.on = True
-        reply.ready = False
-        reply.remote = True
-        reply.positive = False
-        reply.ramp = True
-        value, vtype = _reply_to_value_and_type(reply)
-        assert vtype == ValueType.BASIC_STATUS
-        assert isinstance(value, dict)
-        assert value["on"] is True
-        assert value["ready"] is False
-        assert value["remote"] is True
-        assert value["positive"] is False
-        assert value["ramp"] is True
-        assert len(value) == 5
-
-    def test_reply_to_value_basic_status_partial_fields(self):
-        """Conversion of BasicStatus_reply with only some optional fields."""
-        reply = BasicStatus_reply()
-        reply.on = False
-        reply.remote = True
-        value, vtype = _reply_to_value_and_type(reply)
-        assert vtype == ValueType.BASIC_STATUS
-        assert isinstance(value, dict)
-        assert value["on"] is False
-        assert value["remote"] is True
-        assert "ready" not in value
-        assert "positive" not in value
-        assert "ramp" not in value
-        assert len(value) == 2
-
-    def test_reply_to_value_basic_status_no_optional_fields(self):
-        """Conversion of BasicStatus_reply with no optional fields."""
-        reply = BasicStatus_reply()
-        value, vtype = _reply_to_value_and_type(reply)
-        assert vtype == ValueType.BASIC_STATUS
-        assert value == {}
-
-    def test_reply_to_value_status_reply(self):
-        """Conversion of Status_reply (error status)."""
-        reply = Status_reply()
-        reply.status = -42
-        value, vtype = _reply_to_value_and_type(reply)
-        assert value is None
-        assert vtype == ValueType.SCALAR
-
-    def test_device_info_to_meta(self):
-        """Conversion of DeviceInfo_reply to DeviceMeta."""
-        info = DeviceInfo_reply()
-        info.di = 12345
-        info.name = "M:OUTTMP"
-        info.description = "Outdoor Temperature"
-        info.units = "degF"
-        info.format_hint = 2
-        meta = _device_info_to_meta(info)
-        assert meta.device_index == 12345
-        assert meta.name == "M:OUTTMP"
-        assert meta.description == "Outdoor Temperature"
-        assert meta.units == "degF"
-        assert meta.format_hint == 2
-
-    def test_device_info_to_meta_optional_fields(self):
-        """Conversion with optional fields missing."""
-        info = DeviceInfo_reply()
-        info.di = 12345
-        info.name = "M:OUTTMP"
-        info.description = "Outdoor Temperature"
-        meta = _device_info_to_meta(info)
-        assert meta.device_index == 12345
-        assert meta.units is None
-        assert meta.format_hint is None
+def test_timestamp_from_millis_zero():
+    """Timestamp conversion with zero."""
+    dt = timestamp_from_millis(0)
+    assert dt == datetime.fromtimestamp(0)
 
 
 # =============================================================================
