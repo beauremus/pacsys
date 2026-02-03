@@ -226,12 +226,14 @@ class DPMConnection:
 
     def _send_message(self, data: bytes):
         """Send a length-prefixed message."""
+        assert self._socket is not None, "not connected"
         length = struct.pack(">I", len(data))
         with self._socket_lock:
             self._socket.sendall(length + data)
 
-    def _recv_exact(self, n: int, timeout: float = None) -> bytes:
+    def _recv_exact(self, n: int, timeout: float | None = None) -> bytes:
         """Receive exactly n bytes from socket."""
+        assert self._socket is not None, "not connected"
         if timeout:
             self._socket.settimeout(timeout)
         try:
@@ -248,7 +250,7 @@ class DPMConnection:
         self._recv_buffer = self._recv_buffer[n:]
         return data
 
-    def _recv_reply(self, timeout: float = None) -> object:
+    def _recv_reply(self, timeout: float | None = None) -> object:
         """Receive and unmarshal a single reply."""
         # Read length prefix
         len_bytes = self._recv_exact(4, timeout)
@@ -276,7 +278,7 @@ class DPMConnection:
         data = bytes(msg.marshal())
         self._send_message(data)
 
-    def _send_start_list(self, model: str = None):
+    def _send_start_list(self, model: str | None = None):
         """Send StartList request."""
         msg = StartList_request()
         msg.list_id = self._list_id
@@ -325,7 +327,7 @@ class DPMConnection:
 
         return ref_id
 
-    def start(self, model: str = None):
+    def start(self, model: str | None = None):
         """
         Start data acquisition.
 
@@ -416,7 +418,9 @@ class DPMConnection:
                 raise TimeoutError(f"Timeout reading {drf_request}")
 
             reading = result_holder["reading"]
-            if reading and reading.status != 0:
+            if reading is None:
+                raise DPMError(-1, f"No reading received for {drf_request}")
+            if reading.status != 0:
                 raise DPMError(reading.status, f"Error reading {drf_request}")
 
             return reading
@@ -428,6 +432,7 @@ class DPMConnection:
     def _read_thread_run(self):
         """Read thread main loop."""
         logger.debug("DPM read thread started")
+        assert self._socket is not None, "not connected"
 
         self._socket.settimeout(RECV_TIMEOUT)
 

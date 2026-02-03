@@ -157,6 +157,7 @@ class DPMAcnet:
 
     def _find_dpm(self):
         """Find an available DPM server."""
+        assert self._con is not None, "not connected"
         if self._desired_node:
             # Use specified node
             self._dpm_node = self._con.get_node(self._desired_node)
@@ -188,6 +189,8 @@ class DPMAcnet:
             result_event.set()
 
         # Send as multiple-reply request (stays open for data)
+        assert self._con is not None, "not connected"
+        assert self._dpm_node is not None, "DPM node not found"
         self._request_ctx = self._con.request_multiple(
             node=self._dpm_node,
             task=DPM_TASK,
@@ -219,6 +222,8 @@ class DPMAcnet:
                 result["error"] = str(e)
             result_event.set()
 
+        assert self._con is not None, "not connected"
+        assert self._dpm_node is not None, "DPM node not found"
         ctx = self._con.request_single(
             node=self._dpm_node,
             task=DPM_TASK,
@@ -266,7 +271,7 @@ class DPMAcnet:
 
         logger.debug(f"Added entry tag={tag}, drf={drf}")
 
-    def start(self, model: str = None):
+    def start(self, model: str | None = None):
         """Start data acquisition."""
         msg = StartList_request()
         msg.list_id = self._list_id
@@ -372,7 +377,7 @@ class DPMAcnet:
             self._reply_event.set()
             return
 
-    def readings(self, timeout: float = None):
+    def readings(self, timeout: float | None = None):
         """
         Generator that yields readings from DPM.
 

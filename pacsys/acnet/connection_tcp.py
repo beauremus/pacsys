@@ -726,6 +726,7 @@ class AcnetConnectionTCP:
         """
         if self._disposed:
             raise AcnetError(ACNET_NOT_CONNECTED, "Connection disposed")
+        assert self._socket is not None, "not connected"
 
         with self._cmd_lock:
             try:
@@ -821,6 +822,7 @@ class AcnetConnectionTCP:
     def _read_thread_run(self):
         """Read thread main loop - receives and dispatches packets."""
         logger.debug(f"TCP read thread started for {self._handle_name}")
+        assert self._socket is not None, "not connected"
 
         # Set socket to non-blocking for select
         self._socket.setblocking(False)
@@ -904,13 +906,13 @@ class AcnetConnectionTCP:
     def _handle_packet(self, packet: AcnetPacket):
         """Dispatch a received packet to the appropriate handler."""
         try:
-            if packet.is_reply():
+            if isinstance(packet, AcnetReply):
                 self._handle_reply(packet)
-            elif packet.is_request():
+            elif isinstance(packet, AcnetRequest):
                 self._handle_request(packet)
-            elif packet.is_message():
+            elif isinstance(packet, AcnetMessage):
                 self._handle_message(packet)
-            elif packet.is_cancel():
+            elif isinstance(packet, AcnetCancel):
                 self._handle_cancel(packet)
         except Exception as e:
             logger.exception(f"Error handling packet: {e}")

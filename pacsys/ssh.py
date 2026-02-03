@@ -437,6 +437,7 @@ class SSHClient:
             transport.auth_gssapi_with_mic(username, hop.hostname, gss_deleg_creds=True)
 
         elif hop.auth_method == "key":
+            assert hop.key_filename is not None  # validated in __post_init__
             key_path = Path(hop.key_filename).expanduser()
             if not key_path.exists():
                 raise SSHConnectionError(f"Key file not found: {key_path}", hop=hop)

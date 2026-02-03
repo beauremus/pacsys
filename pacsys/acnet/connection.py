@@ -473,6 +473,7 @@ class AcnetConnection:
         """
         if self._disposed:
             raise AcnetError(ACNET_NOT_CONNECTED, "Connection disposed")
+        assert self._cmd_socket is not None, "sockets not opened"
 
         with self._cmd_lock:
             # Build header: cmd(2) + name(4) + vnode(4)
@@ -520,6 +521,7 @@ class AcnetConnection:
     def _data_thread_run(self):
         """Data thread main loop - receives and dispatches packets."""
         logger.debug(f"Data thread started for {self.name}")
+        assert self._data_socket is not None, "sockets not opened"
 
         while not self._stop_event.is_set():
             try:
@@ -546,13 +548,13 @@ class AcnetConnection:
     def _handle_packet(self, packet: AcnetPacket):
         """Dispatch a received packet to the appropriate handler."""
         try:
-            if packet.is_reply():
+            if isinstance(packet, AcnetReply):
                 self._handle_reply(packet)
-            elif packet.is_request():
+            elif isinstance(packet, AcnetRequest):
                 self._handle_request(packet)
-            elif packet.is_message():
+            elif isinstance(packet, AcnetMessage):
                 self._handle_message(packet)
-            elif packet.is_cancel():
+            elif isinstance(packet, AcnetCancel):
                 self._handle_cancel(packet)
         except Exception as e:
             logger.exception(f"Error handling packet: {e}")

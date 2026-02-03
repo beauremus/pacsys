@@ -1,8 +1,4 @@
-# PACSys
-
-**Pure-Python library for Fermilab's control system**
-
----
+# PACSys - Pure-Python library for Fermilab's control system
 
 ## What is PACSys?
 
@@ -13,11 +9,12 @@ High level features:
 - **Read/Stream** device values (regular and Fast Time Plot)
 - **Write** settings (with proper authorization)
 - **Full data type support** - alarm, status, etc.
+- **Notebook-friendly sync API and a script-oriented async API**
 
 Low level features:
 
-- **Raw ACNET UDP/TCP** - talk to tasks on other nodes (via acnetd TCP/UDP)
-- **FTPMAN snapshots** - so much juicy data
+- **Raw ACNET UDP/TCP** - talk to tasks like a civilized member of ACNET society (via acnetd TCP/UDP)
+- **FTPMAN implemented for snapshots** - yes, really
 - **SSH utilities and ACL-over-SSH** - authenticated command runners, useful for ACL/DABBEL
 
 ```mermaid
@@ -49,12 +46,12 @@ PACSys connects to services using backends:
 | Backend | Protocol | Auth Required |
 |---------|----------|---------------|
 | **DPM/HTTP** | TCP + binary protocol | Kerberos (for writes) |
-| **DPM/gRPC** | gRPC + Protobuf | JWT token (for writes) |
-| **DMQ** | AMQP + binary protocol | Kerberos (mandatory) |
-| **ACL/HTTP** | HTTP/CGI | None (read-only) |
+| **DPM/gRPC** | TCP + gRPC | JWT token (for writes) |
+| **DMQ** | TCP + AMQP + binary protocol | Kerberos (mandatory) |
+| **ACL/HTTP** | TCP + HTTP/CGI | None (read-only) |
 | **ACL/SSH** | TCP + SSH | Kerberos (mandatory) |
 
-See [Backends](backends.md) for detailed comparison and diagrams.
+See [Backends](backends.md) for details.
 
 ## Backend API
 
