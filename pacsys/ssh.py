@@ -71,7 +71,7 @@ class SSHTimeoutError(SSHError):
 
 
 def _gssapi_username() -> str:
-    """Extract username from Kerberos principal (e.g. 'nkuklev@FNAL.GOV' -> 'nkuklev')."""
+    """Extract username from Kerberos principal"""
     import gssapi
 
     creds = gssapi.Credentials(usage="initiate")

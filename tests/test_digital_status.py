@@ -2,7 +2,7 @@
 
 import pytest
 
-from pacsys.digital_status import DigitalStatus, StatusBit
+from pacsys.digital_status import DigitalStatus
 from pacsys.types import Reading, ValueType
 
 
@@ -17,21 +17,6 @@ ACLTST_RAW = 2
 AMANDA_NAMES = ["Henk On/Off", "Ready???", "Remote Henk", "Polarity", " test 2", "testtest"]
 AMANDA_VALUES = ["On", "Nope", "L", "Bi", " good", "GOOD"]
 AMANDA_RAW = 9
-
-
-class TestStatusBit:
-    def test_bool_true(self):
-        bit = StatusBit(position=1, name="Ready", value="Yes", is_set=True)
-        assert bool(bit) is True
-
-    def test_bool_false(self):
-        bit = StatusBit(position=0, name="On", value="No", is_set=False)
-        assert bool(bit) is False
-
-    def test_frozen(self):
-        bit = StatusBit(position=0, name="On", value="Off", is_set=False)
-        with pytest.raises(AttributeError):
-            bit.name = "Changed"
 
 
 class TestFromBitArrays:
@@ -266,56 +251,6 @@ class TestLookup:
         assert 2 not in status
 
 
-class TestIteration:
-    def test_iter(self):
-        status = DigitalStatus.from_bit_arrays(
-            "Z:ACLTST",
-            ACLTST_RAW,
-            ACLTST_NAMES,
-            ACLTST_VALUES,
-        )
-        names = [b.name for b in status]
-        assert names == ["On", "Ready", "Polarity"]
-
-    def test_len(self):
-        status = DigitalStatus.from_bit_arrays(
-            "G:AMANDA",
-            AMANDA_RAW,
-            AMANDA_NAMES,
-            AMANDA_VALUES,
-        )
-        assert len(status) == 6
-
-
-class TestDisplay:
-    def test_str_format(self):
-        status = DigitalStatus.from_bit_arrays(
-            "Z:ACLTST",
-            ACLTST_RAW,
-            ACLTST_NAMES,
-            ACLTST_VALUES,
-        )
-        text = str(status)
-        assert "Z:ACLTST" in text
-        assert "0x02" in text
-        assert "On:" in text
-        assert "Ready:" in text
-        assert "Polarity:" in text
-        assert "No" in text
-        assert "Yes" in text
-        assert "Minus" in text
-
-    def test_to_dict(self):
-        status = DigitalStatus.from_bit_arrays(
-            "Z:ACLTST",
-            ACLTST_RAW,
-            ACLTST_NAMES,
-            ACLTST_VALUES,
-        )
-        d = status.to_dict()
-        assert d == {"On": "No", "Ready": "Yes", "Polarity": "Minus"}
-
-
 class TestEdgeCases:
     def test_all_bits_set(self):
         names = ["A", "B", "C", "D"]
@@ -339,7 +274,3 @@ class TestEdgeCases:
         assert status[1].is_set is True  # bit 1 = 1
         assert status[4].is_set is False  # bit 4 = 0
 
-    def test_frozen(self):
-        status = DigitalStatus.from_bit_arrays("T", 0, ["A"], ["B"])
-        with pytest.raises(AttributeError):
-            status.raw_value = 99

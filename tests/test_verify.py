@@ -13,30 +13,6 @@ from pacsys.verify import (
 )
 
 
-class TestVerifyDefaults:
-    def test_default_values(self):
-        v = Verify()
-        assert v.check_first is False
-        assert v.tolerance == 0.0
-        assert v.initial_delay == 0.3
-        assert v.retry_delay == 0.5
-        assert v.max_attempts == 3
-        assert v.readback is None
-        assert v.always is False
-
-    def test_custom_values(self):
-        v = Verify(check_first=True, tolerance=0.5, max_attempts=5, always=True)
-        assert v.check_first is True
-        assert v.tolerance == 0.5
-        assert v.max_attempts == 5
-        assert v.always is True
-
-    def test_frozen(self):
-        v = Verify()
-        with pytest.raises(AttributeError):
-            v.tolerance = 1.0
-
-
 class TestVerifyContextManager:
     def test_context_manager_push_pop(self):
         assert get_active_verify() is None

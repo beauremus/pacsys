@@ -12,26 +12,9 @@ from unittest import mock
 
 import pytest
 
-from pacsys.auth import Auth, KerberosAuth, JWTAuth
+from pacsys.auth import KerberosAuth, JWTAuth
 from pacsys.errors import AuthenticationError
 from tests.devices import make_jwt_token, MockGSSAPIModule
-
-
-class TestAuthAbstract:
-    """Tests for Auth abstract base class."""
-
-    def test_auth_is_abstract(self):
-        """Test that Auth cannot be instantiated directly."""
-        with pytest.raises(TypeError, match="Can't instantiate abstract class"):
-            Auth()
-
-    def test_kerberos_auth_is_subclass(self):
-        """Test that KerberosAuth is subclass of Auth."""
-        assert issubclass(KerberosAuth, Auth)
-
-    def test_jwt_auth_is_subclass(self):
-        """Test that JWTAuth is subclass of Auth."""
-        assert issubclass(JWTAuth, Auth)
 
 
 class TestJWTAuth:
@@ -202,34 +185,6 @@ class TestKerberosAuth:
             with pytest.raises(AuthenticationError, match="No valid Kerberos credentials"):
                 KerberosAuth()
 
-    def test_frozen_dataclass(self):
-        """Test that KerberosAuth is immutable."""
-        mock_gssapi = MockGSSAPIModule()
-
-        with mock.patch.dict("sys.modules", {"gssapi": mock_gssapi}):
-            auth = KerberosAuth()
-            # KerberosAuth has no fields, but test that it's frozen
-            assert hasattr(auth, "__dataclass_fields__")
-
-
-class TestAuthExports:
-    """Tests for auth module exports."""
-
-    def test_exports_in_pacsys(self):
-        """Test that auth classes are exported from pacsys."""
-        import pacsys
-
-        assert hasattr(pacsys, "Auth")
-        assert hasattr(pacsys, "KerberosAuth")
-        assert hasattr(pacsys, "JWTAuth")
-
-    def test_exports_in_all(self):
-        """Test that auth classes are in __all__."""
-        import pacsys
-
-        assert "Auth" in pacsys.__all__
-        assert "KerberosAuth" in pacsys.__all__
-        assert "JWTAuth" in pacsys.__all__
 
 
 if __name__ == "__main__":

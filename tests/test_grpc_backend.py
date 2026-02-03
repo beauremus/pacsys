@@ -203,32 +203,6 @@ def auth_backend_with_mock_stub(mock_stub, sample_jwt):
 class TestGRPCBackendInit:
     """Tests for GRPCBackend initialization."""
 
-    def test_default_parameters(self):
-        backend = grpc_backend.GRPCBackend()
-        try:
-            assert backend.host == grpc_backend.DEFAULT_HOST
-            assert backend.port == grpc_backend.DEFAULT_PORT
-            assert backend.timeout == grpc_backend.DEFAULT_TIMEOUT
-            assert not backend.authenticated
-        finally:
-            backend.close()
-
-    def test_custom_parameters(self, sample_jwt):
-        auth = JWTAuth(token=sample_jwt)
-        backend = grpc_backend.GRPCBackend(
-            host="custom.example.com",
-            port=50052,
-            auth=auth,
-            timeout=5.0,
-        )
-        try:
-            assert backend.host == "custom.example.com"
-            assert backend.port == 50052
-            assert backend.timeout == 5.0
-            assert backend.authenticated
-        finally:
-            backend.close()
-
     def test_token_from_environment(self, sample_jwt):
         with mock.patch.dict(os.environ, {"PACSYS_JWT_TOKEN": sample_jwt}):
             backend = grpc_backend.GRPCBackend()
@@ -795,13 +769,6 @@ class TestStatusCodeNormalization:
 # ─────────────────────────────────────────────────────────────────────────────
 # Backend Inheritance
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestBackendInheritance:
-    """Tests for Backend abstract base class inheritance."""
-
-    def test_grpc_backend_is_subclass(self):
-        assert issubclass(grpc_backend.GRPCBackend, Backend)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

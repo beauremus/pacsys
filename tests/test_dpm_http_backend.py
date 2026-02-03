@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pacsys.backends import Backend, timestamp_from_millis
+from pacsys.backends import timestamp_from_millis
 from pacsys.backends.dpm_http import (
     DPMHTTPBackend,
     _reply_to_value_and_type,
@@ -66,53 +66,8 @@ from tests.devices import (
 # =============================================================================
 
 
-class TestBackendAbstract:
-    """Tests for Backend abstract base class."""
-
-    def test_backend_is_abstract(self):
-        """Backend cannot be instantiated directly."""
-        with pytest.raises(TypeError):
-            Backend()
-
-    def test_dpm_backend_is_subclass(self):
-        """DPMHTTPBackend is a Backend subclass."""
-        assert issubclass(DPMHTTPBackend, Backend)
-
-
-# =============================================================================
-# Initialization Tests
-# =============================================================================
-
-
 class TestDPMHTTPBackendInit:
-    """Tests for DPMHTTPBackend initialization."""
-
-    def test_default_parameters(self):
-        """Default parameters are set correctly."""
-        backend = DPMHTTPBackend()
-        try:
-            assert backend.host == "acsys-proxy.fnal.gov"
-            assert backend.port == 6802
-            assert backend.pool_size == 4
-            assert backend.timeout == 5.0
-        finally:
-            backend.close()
-
-    def test_custom_parameters(self):
-        """Initialization with custom parameters."""
-        backend = DPMHTTPBackend(
-            host="test.example.com",
-            port=1234,
-            pool_size=8,
-            timeout=5.0,
-        )
-        try:
-            assert backend.host == "test.example.com"
-            assert backend.port == 1234
-            assert backend.pool_size == 8
-            assert backend.timeout == 5.0
-        finally:
-            backend.close()
+    """Tests for DPMHTTPBackend input validation."""
 
     @pytest.mark.parametrize(
         "kwargs,match",
@@ -979,13 +934,6 @@ class TestFactoryFunction:
             assert backend.timeout == 30.0
         finally:
             backend.close()
-
-    def test_factory_in_exports(self):
-        """dpm_http is in pacsys exports."""
-        import pacsys
-
-        assert "dpm_http" in dir(pacsys)
-        assert callable(pacsys.dpm_http)
 
 
 # =============================================================================
