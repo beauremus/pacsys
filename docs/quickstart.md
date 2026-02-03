@@ -3,7 +3,7 @@
 ## Prerequisites
 
 1. **Network access** to Fermilab (on-site, VPN, or tunnel)
-2. **Python 3.9+**
+2. **Python 3.10+**
 3. For **write operations**: Valid Kerberos credentials
 
 ## Installation

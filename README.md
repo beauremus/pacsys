@@ -93,7 +93,7 @@ pip install pacsys
 
 ## Requirements
 
-- Python 3.9+
+- Python 3.10+
 - For writes: Kerberos credentials with appropriate role assigned
 
 ## Documentation
