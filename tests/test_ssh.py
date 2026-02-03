@@ -1,6 +1,7 @@
 """Tests for pacsys.ssh - SSH client with multi-hop support."""
 
 import socket
+import sys
 import threading
 from unittest.mock import MagicMock, patch
 
@@ -18,6 +19,12 @@ from pacsys.ssh import (
     Tunnel,
     _normalize_hops,
 )
+
+# pacsys.__init__ defines a function named 'ssh' that shadows the pacsys.ssh
+# module. On Python <=3.12, patch("pacsys.ssh.X") resolves via getattr and
+# finds the function instead of the module, breaking all mock targets.
+# We grab the real module from sys.modules for patch.object() calls.
+_ssh_mod = sys.modules["pacsys.ssh"]
 
 
 @pytest.fixture(autouse=True)
@@ -77,10 +84,10 @@ class TestSSHHop:
         hop = SSHHop("host", username="bob")
         assert hop.effective_username == "bob"
 
-    @patch("pacsys.ssh._gssapi_username", return_value="kerbuser")
-    def test_effective_username_gssapi(self, mock_gssapi):
-        hop = SSHHop("host")  # auth_method="gssapi" by default, no username
-        assert hop.effective_username == "kerbuser"
+    def test_effective_username_gssapi(self):
+        with patch.object(_ssh_mod, "_gssapi_username", return_value="kerbuser"):
+            hop = SSHHop("host")  # auth_method="gssapi" by default, no username
+            assert hop.effective_username == "kerbuser"
 
     def test_effective_username_password_fallback(self):
         hop = SSHHop("host", auth_method="password", password="pw")
@@ -158,8 +165,8 @@ def _make_mock_transport(active=True):
 
 
 class TestSSHClientInit:
-    @patch("pacsys.ssh.socket.create_connection")
-    @patch("pacsys.ssh.paramiko.Transport")
+    @patch("socket.create_connection")
+    @patch("paramiko.Transport")
     def test_no_connection_until_operation(self, mock_transport_cls, mock_connect):
         """Client should not connect at init time."""
         ssh = SSHClient("host.example.com")
@@ -190,8 +197,8 @@ class TestSSHClientInit:
 
 
 class TestSSHClientConnect:
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_single_hop_connects(self, mock_connect, mock_transport_cls):
         mock_sock = MagicMock()
         mock_connect.return_value = mock_sock
@@ -208,8 +215,8 @@ class TestSSHClientConnect:
         mock_transport.set_keepalive.assert_called_once_with(30)
         mock_transport.auth_password.assert_called_once()
 
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_multi_hop_chain(self, mock_connect, mock_transport_cls):
         """Multi-hop should open direct-tcpip channel for second hop."""
         mock_sock = MagicMock()
@@ -236,8 +243,8 @@ class TestSSHClientConnect:
         hop1_transport.open_channel.assert_called_once_with("direct-tcpip", ("target", 22), ("127.0.0.1", 0))
         mock_transport_cls.assert_any_call(hop1_channel)
 
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_connection_failure_cleans_up(self, mock_connect, mock_transport_cls):
         mock_connect.side_effect = socket.error("Connection refused")
 
@@ -247,8 +254,8 @@ class TestSSHClientConnect:
 
         assert ssh.connected is False
 
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_auth_failure_cleans_up(self, mock_connect, mock_transport_cls):
         mock_transport = MagicMock()
         mock_transport.auth_password.side_effect = paramiko.AuthenticationException("bad pw")
@@ -312,8 +319,8 @@ def _make_exec_channel(stdout=b"", stderr=b"", exit_code=0):
 
 
 class TestSSHClientExec:
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_exec_success(self, mock_connect, mock_transport_cls):
         mock_connect.return_value = MagicMock()
         mock_transport = _make_mock_transport()
@@ -332,8 +339,8 @@ class TestSSHClientExec:
         chan.shutdown_write.assert_called_once()
         chan.close.assert_called_once()
 
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_exec_with_input(self, mock_connect, mock_transport_cls):
         mock_connect.return_value = MagicMock()
         mock_transport = _make_mock_transport()
@@ -348,8 +355,8 @@ class TestSSHClientExec:
         chan.sendall.assert_called_once_with(b"hello")
         assert result.ok
 
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_exec_timeout(self, mock_connect, mock_transport_cls):
         mock_connect.return_value = MagicMock()
         mock_transport = _make_mock_transport()
@@ -364,8 +371,8 @@ class TestSSHClientExec:
         with pytest.raises(SSHTimeoutError, match="timed out"):
             ssh.exec("sleep 100", timeout=1.0)
 
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_exec_inactive_transport_raises(self, mock_connect, mock_transport_cls):
         mock_connect.return_value = MagicMock()
         mock_transport = _make_mock_transport(active=False)
@@ -435,8 +442,8 @@ def _make_stream_channel(chunks, stderr=b"", exit_code=0):
 
 
 class TestSSHClientExecStream:
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_stream_yields_lines(self, mock_connect, mock_transport_cls):
         mock_connect.return_value = MagicMock()
         mock_transport = _make_mock_transport()
@@ -450,8 +457,8 @@ class TestSSHClientExecStream:
 
         assert lines == ["line1", "line2", "line3"]
 
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_stream_nonzero_exit_raises(self, mock_connect, mock_transport_cls):
         mock_connect.return_value = MagicMock()
         mock_transport = _make_mock_transport()
@@ -471,8 +478,8 @@ class TestSSHClientExecStream:
 
 
 class TestSSHClientExecMany:
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_exec_many_returns_all(self, mock_connect, mock_transport_cls):
         mock_connect.return_value = MagicMock()
         mock_transport = _make_mock_transport()
@@ -496,8 +503,8 @@ class TestSSHClientExecMany:
 
 
 class TestSSHClientForward:
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_forward_creates_tunnel(self, mock_connect, mock_transport_cls):
         mock_connect.return_value = MagicMock()
         mock_transport = _make_mock_transport()
@@ -516,8 +523,8 @@ class TestSSHClientForward:
 
         assert not tunnel.active
 
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_forward_tracked_and_cleaned(self, mock_connect, mock_transport_cls):
         mock_connect.return_value = MagicMock()
         mock_transport = _make_mock_transport()
@@ -538,9 +545,9 @@ class TestSSHClientForward:
 
 
 class TestSSHClientSFTP:
-    @patch("pacsys.ssh.paramiko.SFTPClient.from_transport")
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.SFTPClient.from_transport")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_sftp_returns_session(self, mock_connect, mock_transport_cls, mock_sftp_from):
         mock_connect.return_value = MagicMock()
         mock_transport = _make_mock_transport()
@@ -555,9 +562,9 @@ class TestSSHClientSFTP:
         assert isinstance(session, SFTPSession)
         mock_sftp_from.assert_called_once_with(mock_transport)
 
-    @patch("pacsys.ssh.paramiko.SFTPClient.from_transport")
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.SFTPClient.from_transport")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_sftp_none_raises(self, mock_connect, mock_transport_cls, mock_sftp_from):
         mock_connect.return_value = MagicMock()
         mock_transport = _make_mock_transport()
@@ -611,8 +618,8 @@ class TestSFTPSession:
 
 
 class TestSSHClientClose:
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_close_disconnects(self, mock_connect, mock_transport_cls):
         mock_connect.return_value = MagicMock()
         mock_transport = _make_mock_transport()
@@ -626,8 +633,8 @@ class TestSSHClientClose:
         assert not ssh.connected
         mock_transport.close.assert_called()
 
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_double_close_safe(self, mock_connect, mock_transport_cls):
         mock_connect.return_value = MagicMock()
         mock_transport = _make_mock_transport()
@@ -649,8 +656,8 @@ class TestSSHClientClose:
 
 
 class TestSSHClientContextManager:
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_context_manager(self, mock_connect, mock_transport_cls):
         mock_connect.return_value = MagicMock()
         mock_transport = _make_mock_transport()
@@ -687,8 +694,8 @@ class TestTunnel:
 
 
 class TestAuthDispatch:
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_gssapi_auth_explicit_username(self, mock_connect, mock_transport_cls):
         mock_connect.return_value = MagicMock()
         mock_transport = _make_mock_transport()
@@ -698,9 +705,9 @@ class TestAuthDispatch:
         ssh._ensure_connected()
         mock_transport.auth_gssapi_with_mic.assert_called_once_with("user", "host", gss_deleg_creds=True)
 
-    @patch("pacsys.ssh._gssapi_username", return_value="kerbuser")
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch.object(_ssh_mod, "_gssapi_username", return_value="kerbuser")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_gssapi_auth_from_principal(self, mock_connect, mock_transport_cls, mock_gssapi):
         mock_connect.return_value = MagicMock()
         mock_transport = _make_mock_transport()
@@ -710,9 +717,9 @@ class TestAuthDispatch:
         ssh._ensure_connected()
         mock_transport.auth_gssapi_with_mic.assert_called_once_with("kerbuser", "host", gss_deleg_creds=True)
 
-    @patch("pacsys.ssh.paramiko.RSAKey.from_private_key_file")
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.RSAKey.from_private_key_file")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_key_auth(self, mock_connect, mock_transport_cls, mock_key_load):
         mock_connect.return_value = MagicMock()
         mock_transport = _make_mock_transport()
@@ -723,12 +730,12 @@ class TestAuthDispatch:
 
         # Create a temp key file path
         ssh = SSHClient(SSHHop("host", auth_method="key", key_filename="/tmp/test_key", username="user"))
-        with patch("pacsys.ssh.Path.exists", return_value=True):
+        with patch("pathlib.Path.exists", return_value=True):
             ssh._ensure_connected()
         mock_transport.auth_publickey.assert_called_once_with("user", mock_pkey)
 
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_key_missing_file_raises(self, mock_connect, mock_transport_cls):
         mock_connect.return_value = MagicMock()
         mock_transport = _make_mock_transport()
@@ -738,8 +745,8 @@ class TestAuthDispatch:
         with pytest.raises(SSHConnectionError, match="Key file not found"):
             ssh._ensure_connected()
 
-    @patch("pacsys.ssh.paramiko.Transport")
-    @patch("pacsys.ssh.socket.create_connection")
+    @patch("paramiko.Transport")
+    @patch("socket.create_connection")
     def test_password_auth(self, mock_connect, mock_transport_cls):
         mock_connect.return_value = MagicMock()
         mock_transport = _make_mock_transport()
