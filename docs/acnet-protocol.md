@@ -172,4 +172,5 @@ The byte-swap rule means:
 ## Further Reading
 
 - ACNET Design Note 22 (internal Fermilab documentation)
+- [FTP Technical Reference](https://www-bd.fnal.gov/controls/micro_p/mooc_project/ftp.html) - Original FTP protocol documentation
 - `pacsys/acnet/` source code for implementation details

@@ -556,7 +556,7 @@ class TestReset:
         # Now returns "no reading configured" error, not the specific error
         reading = fake.get("M:OUTTMP")
         assert reading.is_error
-        assert "No reading configured" in reading.message
+        assert reading.message and "No reading configured" in reading.message
 
     def test_reset_clears_read_history(self):
         """reset clears read history."""
@@ -644,7 +644,7 @@ class TestGetMethod:
 
         assert reading.is_error
         assert reading.error_code == ERR_RETRY
-        assert "No reading configured" in reading.message
+        assert reading.message and "No reading configured" in reading.message
 
     def test_get_known_device_wrong_property_returns_noprop(self):
         """get() returns DBM_NOPROP when device is known but property isn't configured."""
@@ -656,7 +656,7 @@ class TestGetMethod:
         assert reading.is_error
         assert reading.facility_code == FACILITY_DBM
         assert reading.error_code == ERR_NOPROP
-        assert "No such property" in reading.message
+        assert reading.message and "No such property" in reading.message
 
     def test_get_configured_reading(self):
         """get() returns configured Reading."""
