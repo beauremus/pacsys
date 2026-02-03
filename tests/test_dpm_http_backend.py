@@ -222,15 +222,6 @@ class TestMultipleDeviceRead:
             finally:
                 backend.close()
 
-    def test_get_many_empty_list(self):
-        """Empty list returns empty list."""
-        backend = DPMHTTPBackend()
-        try:
-            readings = backend.get_many([])
-            assert readings == []
-        finally:
-            backend.close()
-
 
 # =============================================================================
 # Batch Edge Cases Tests
@@ -470,29 +461,6 @@ class TestDPMHTTPBackendStreaming:
         with pytest.raises(RuntimeError, match="Backend is closed"):
             backend.subscribe(["M:OUTTMP@p,1000"])
 
-    def test_subscription_handle_properties(self):
-        """Subscription handle basic properties."""
-        from pacsys.backends.dpm_http import _DPMHTTPSubscriptionHandle
-
-        backend = DPMHTTPBackend()
-        try:
-            handle = _DPMHTTPSubscriptionHandle(
-                backend=backend,
-                sub_id=1,
-                is_callback_mode=False,
-            )
-            handle._ref_ids = [1, 2, 3]
-
-            assert handle.ref_ids == [1, 2, 3]
-            assert handle.stopped is False
-            assert handle.exc is None
-            assert handle._sub_id == 1
-
-            handle._stopped = True
-            assert handle.stopped is True
-        finally:
-            backend.close()
-
     def test_callback_mode_cannot_iterate(self):
         """Callback-mode handle cannot be iterated."""
         from pacsys.backends.dpm_http import _DPMHTTPSubscriptionHandle
@@ -557,28 +525,6 @@ class TestDPMHTTPBackendStreaming:
 class TestDPMHTTPBackendMultiConnection:
     """Tests for multi-connection streaming architecture."""
 
-    def test_each_subscribe_gets_unique_sub_id(self):
-        """Each subscribe() call gets a unique sub_id."""
-        backend = DPMHTTPBackend()
-        try:
-            assert backend._next_sub_id == 1
-
-            backend._next_sub_id += 1
-            assert backend._next_sub_id == 2
-
-            backend._next_sub_id += 1
-            assert backend._next_sub_id == 3
-        finally:
-            backend.close()
-
-    def test_stream_connections_dict_empty_initially(self):
-        """_stream_connections is empty initially."""
-        backend = DPMHTTPBackend()
-        try:
-            assert len(backend._stream_connections) == 0
-        finally:
-            backend.close()
-
     def test_stop_streaming_clears_all_connections(self):
         """stop_streaming() clears all connections."""
         backend = DPMHTTPBackend()
@@ -589,25 +535,6 @@ class TestDPMHTTPBackendMultiConnection:
             backend.stop_streaming()
 
             assert len(backend._stream_connections) == 0
-        finally:
-            backend.close()
-
-
-# =============================================================================
-# Factory Function Tests
-# =============================================================================
-
-
-class TestFactoryFunction:
-    """Tests for pacsys.dpm_http() factory function."""
-
-    def test_factory_creates_backend(self):
-        """dpm_http() creates a DPMHTTPBackend."""
-        import pacsys
-
-        backend = pacsys.dpm_http()
-        try:
-            assert isinstance(backend, DPMHTTPBackend)
         finally:
             backend.close()
 

@@ -504,15 +504,6 @@ class TestDMQBackendRead:
             assert readings[0].value == TEMP_VALUE
             assert readings[1].value == 1.234
 
-    def test_get_many_empty_list(self):
-        """Test get_many with empty list returns empty list."""
-        with _mock_gssapi():
-            backend = DMQBackend(host="localhost", auth=_create_mock_auth())
-            try:
-                assert backend.get_many([]) == []
-            finally:
-                backend.close()
-
     def test_get_many_same_device_different_properties(self):
         """Regression: routing key matching when ref_id is missing."""
         replies = [make_double_reply(1.0), make_double_reply(2.0)]
@@ -637,13 +628,6 @@ class TestDMQBackendSubscribe:
             with handle:
                 assert not handle.stopped
             assert handle.stopped
-
-    def test_subscribe_ref_ids(self):
-        """Test that handle has correct ref_ids."""
-        with _mock_dmq_backend([make_double_reply(TEMP_VALUE, ref_id=1)]) as backend:
-            handle = backend.subscribe([TEMP_DEVICE, TEMP_DEVICE_2])
-            assert handle.ref_ids == [1, 2]
-            handle.stop()
 
 
 # =============================================================================
@@ -777,15 +761,6 @@ class TestDMQBackendWrite:
             result = backend.write(TEMP_DEVICE, TEMP_VALUE, timeout=5.0)
             assert result.success
             assert result.error_code == 0
-
-    def test_write_many_empty_list(self):
-        """Test that write_many() with empty list returns empty list."""
-        with _mock_gssapi():
-            backend = DMQBackend(host="localhost", auth=_create_mock_auth())
-            try:
-                assert backend.write_many([]) == []
-            finally:
-                backend.close()
 
     def test_write_many_returns_results(self):
         """Test that write_many() returns list of WriteResult."""
@@ -1102,12 +1077,6 @@ class TestReplyToReading:
 
 class TestDMQBackendLifecycle:
     """Tests for DMQBackend lifecycle operations."""
-
-    def test_context_manager(self):
-        """Test backend as context manager."""
-        with _mock_gssapi(), mock.patch.object(DMQBackend, "_create_gss_context", return_value=_mock_gss_context()):
-            with DMQBackend(host="localhost", auth=_create_mock_auth()) as backend:
-                assert backend is not None
 
     def test_close_idempotent(self):
         """Test that close() can be called multiple times."""

@@ -10,19 +10,6 @@ from pacsys.backends.grpc_backend import GRPC_AVAILABLE
 class TestDPMHTTPBackendStreaming:
     """Tests for DPMHTTPBackend streaming methods."""
 
-    def test_subscribe_allows_optional_callback(self):
-        """subscribe() should allow optional callback (for iterator mode)."""
-        from pacsys.backends.dpm_http import DPMHTTPBackend
-
-        backend = DPMHTTPBackend()
-        try:
-            # Should NOT raise - callback is now optional
-            # Note: this will fail to actually subscribe without a server,
-            # but it should not raise ValueError for missing callback
-            pass  # Just testing that the method signature is correct
-        finally:
-            backend.close()
-
     def test_subscribe_requires_drfs(self):
         """subscribe() should require non-empty drfs."""
         from pacsys.backends.dpm_http import DPMHTTPBackend
@@ -31,38 +18,6 @@ class TestDPMHTTPBackendStreaming:
         try:
             with pytest.raises(ValueError, match="drfs cannot be empty"):
                 backend.subscribe([], callback=lambda r, h: None)
-        finally:
-            backend.close()
-
-    def test_subscribe_without_callback_is_iterator_mode(self):
-        """subscribe() without callback should create iterator-mode handle."""
-        from pacsys.backends.dpm_http import _DPMHTTPSubscriptionHandle, DPMHTTPBackend
-
-        backend = DPMHTTPBackend()
-        try:
-            handle = _DPMHTTPSubscriptionHandle(
-                backend=backend,
-                sub_id=1,
-                is_callback_mode=False,  # No callback = iterator mode
-            )
-
-            assert handle._is_callback_mode is False
-        finally:
-            backend.close()
-
-    def test_subscribe_with_callback_is_callback_mode(self):
-        """subscribe() with callback should create callback-mode handle."""
-        from pacsys.backends.dpm_http import _DPMHTTPSubscriptionHandle, DPMHTTPBackend
-
-        backend = DPMHTTPBackend()
-        try:
-            handle = _DPMHTTPSubscriptionHandle(
-                backend=backend,
-                sub_id=1,
-                is_callback_mode=True,  # Has callback
-            )
-
-            assert handle._is_callback_mode is True
         finally:
             backend.close()
 

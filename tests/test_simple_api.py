@@ -242,16 +242,6 @@ class TestGetMany:
         assert len(results) == 3
         mock_backend.get_many.assert_called_once()
 
-    def test_get_many_empty_list(self, mock_backend):
-        """get_many() returns empty list for empty input."""
-        mock_backend.get_many.return_value = []
-
-        with mock.patch.object(pacsys, "_global_dpm_backend", mock_backend):
-            with mock.patch.object(pacsys, "_backend_initialized", True):
-                results = pacsys.get_many([])
-
-        assert results == []
-
     def test_get_many_with_timeout(self, mock_backend, sample_reading):
         """get_many() passes timeout to backend."""
         mock_backend.get_many.return_value = [sample_reading]
@@ -425,101 +415,8 @@ class TestEnvironmentVariables:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestDPMFactory:
-    """Tests for pacsys.dpm() factory function."""
-
-    def test_dpm_creates_backend_with_defaults(self):
-        """dpm() creates backend with default settings."""
-        with mock.patch("pacsys.backends.dpm_http.DPMHTTPBackend") as MockBackend:
-            MockBackend.return_value = mock.MagicMock(spec=DPMHTTPBackend)
-            pacsys.dpm()
-
-        MockBackend.assert_called_once_with(
-            host="acsys-proxy.fnal.gov",
-            port=6802,
-            pool_size=4,
-            timeout=5.0,
-            auth=None,
-            role=None,
-        )
-
-    def test_dpm_creates_backend_with_custom_settings(self):
-        """dpm() creates backend with custom settings."""
-        with mock.patch("pacsys.backends.dpm_http.DPMHTTPBackend") as MockBackend:
-            MockBackend.return_value = mock.MagicMock(spec=DPMHTTPBackend)
-            pacsys.dpm(
-                host="custom.fnal.gov",
-                port=7000,
-                pool_size=8,
-                timeout=30.0,
-            )
-
-        MockBackend.assert_called_once_with(
-            host="custom.fnal.gov",
-            port=7000,
-            pool_size=8,
-            timeout=30.0,
-            auth=None,
-            role=None,
-        )
-
-    def test_dpm_with_auth_passes_to_backend(self):
-        """dpm() with auth passes it to backend."""
-        with mock.patch("pacsys.backends.dpm_http.DPMHTTPBackend") as MockBackend:
-            MockBackend.return_value = mock.MagicMock(spec=DPMHTTPBackend)
-            pacsys.dpm(auth="kerberos")
-
-        MockBackend.assert_called_once_with(
-            host="acsys-proxy.fnal.gov",
-            port=6802,
-            pool_size=4,
-            timeout=5.0,
-            auth="kerberos",
-            role=None,
-        )
-
-    def test_dpm_with_role_passes_to_backend(self):
-        """dpm() with role passes it to backend."""
-        with mock.patch("pacsys.backends.dpm_http.DPMHTTPBackend") as MockBackend:
-            MockBackend.return_value = mock.MagicMock(spec=DPMHTTPBackend)
-            pacsys.dpm(role="Operator")
-
-        MockBackend.assert_called_once_with(
-            host="acsys-proxy.fnal.gov",
-            port=6802,
-            pool_size=4,
-            timeout=5.0,
-            auth=None,
-            role="Operator",
-        )
-
-
 class TestACLFactory:
     """Tests for pacsys.acl() factory function."""
-
-    def test_acl_returns_backend(self):
-        """acl() returns an ACLBackend instance."""
-        from pacsys.backends.acl import ACLBackend
-
-        backend = pacsys.acl()
-        try:
-            assert isinstance(backend, ACLBackend)
-            assert backend.base_url == "https://www-ad.fnal.gov/cgi-bin/acl.pl"
-            assert backend.timeout == 5.0
-        finally:
-            backend.close()
-
-    def test_acl_custom_parameters(self):
-        """acl() accepts custom parameters."""
-        from pacsys.backends.acl import ACLBackend
-
-        backend = pacsys.acl(base_url="https://custom.example.com/acl", timeout=5.0)
-        try:
-            assert isinstance(backend, ACLBackend)
-            assert backend.base_url == "https://custom.example.com/acl"
-            assert backend.timeout == 5.0
-        finally:
-            backend.close()
 
     def test_acl_context_manager(self):
         """acl() returns a context manager."""

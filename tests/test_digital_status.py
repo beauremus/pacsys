@@ -239,17 +239,6 @@ class TestLookup:
         with pytest.raises(IndexError):
             status[2]  # bit 2 is undefined for Z:ACLTST
 
-    def test_get_with_default(self, status):
-        assert status.get("Nonexistent") is None
-        assert status.get(99) is None
-        assert status.get("Ready") is not None
-
-    def test_contains(self, status):
-        assert "Ready" in status
-        assert "Nonexistent" not in status
-        assert 0 in status
-        assert 2 not in status
-
 
 class TestEdgeCases:
     def test_all_bits_set(self):

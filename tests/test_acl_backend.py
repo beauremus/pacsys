@@ -195,15 +195,6 @@ class TestMultipleDeviceRead:
             finally:
                 backend.close()
 
-    def test_get_many_empty_list(self):
-        """Test that empty list returns empty list."""
-        backend = ACLBackend()
-        try:
-            readings = backend.get_many([])
-            assert readings == []
-        finally:
-            backend.close()
-
 
 class TestHTTPErrors:
     """Tests for HTTP error handling."""

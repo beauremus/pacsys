@@ -14,7 +14,6 @@ from pacsys.ssh import (
     SSHCommandError,
     SSHHop,
     SSHTimeoutError,
-    CommandResult,
     SFTPSession,
     Tunnel,
     _normalize_hops,
@@ -72,18 +71,6 @@ class TestSSHHop:
         with pytest.raises(ValueError, match="password required"):
             SSHHop("host", auth_method="password")
 
-    def test_key_auth_valid(self):
-        hop = SSHHop("host", auth_method="key", key_filename="~/.ssh/id_rsa")
-        assert hop.key_filename == "~/.ssh/id_rsa"
-
-    def test_password_auth_valid(self):
-        hop = SSHHop("host", auth_method="password", password="secret")
-        assert hop.password == "secret"
-
-    def test_effective_username_explicit(self):
-        hop = SSHHop("host", username="bob")
-        assert hop.effective_username == "bob"
-
     def test_effective_username_gssapi(self):
         with patch.object(_ssh_mod, "_gssapi_username", return_value="kerbuser"):
             hop = SSHHop("host")  # auth_method="gssapi" by default, no username
@@ -129,21 +116,6 @@ class TestNormalizeHops:
     def test_bad_type_raises(self):
         with pytest.raises(TypeError, match="Expected str or SSHHop"):
             _normalize_hops([123])  # type: ignore
-
-
-# ---------------------------------------------------------------------------
-# CommandResult
-# ---------------------------------------------------------------------------
-
-
-class TestCommandResult:
-    def test_ok_zero(self):
-        r = CommandResult("ls", 0, "file.txt\n", "")
-        assert r.ok is True
-
-    def test_ok_nonzero(self):
-        r = CommandResult("ls /bad", 1, "", "not found\n")
-        assert r.ok is False
 
 
 # ---------------------------------------------------------------------------

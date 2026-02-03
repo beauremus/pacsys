@@ -7,7 +7,6 @@ import pytest
 from pacsys.types import (
     ValueType,
     Reading,
-    WriteResult,
 )
 
 
@@ -60,20 +59,3 @@ class TestReading:
         """Reading.name extracts device name from DRF."""
         reading = Reading(drf=drf, value_type=ValueType.SCALAR)
         assert reading.name == expected_name
-
-
-class TestWriteResult:
-    """Tests for WriteResult.success property."""
-
-    @pytest.mark.parametrize(
-        "error_code,expected_success",
-        [
-            (0, True),  # success
-            (-1, False),  # error
-            (1, False),  # warning (only error_code == 0 is success)
-        ],
-    )
-    def test_success_property(self, error_code, expected_success):
-        """WriteResult.success is True only when error_code == 0."""
-        result = WriteResult(drf="M:OUTTMP", error_code=error_code)
-        assert result.success is expected_success

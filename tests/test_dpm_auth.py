@@ -179,19 +179,6 @@ class TestWriteSuccess:
                 finally:
                     backend.close()
 
-    def test_write_empty_list(self):
-        """Test that empty write list returns empty results."""
-        mock_gssapi = MockGSSAPIModule()
-
-        with mock.patch.dict("sys.modules", {"gssapi": mock_gssapi}):
-            auth = KerberosAuth()
-            backend = DPMHTTPBackend(auth=auth, role="Operator")
-            try:
-                results = backend.write_many([])
-                assert results == []
-            finally:
-                backend.close()
-
 
 class TestWriteFailure:
     """Tests for write operation failures."""

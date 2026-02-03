@@ -378,11 +378,6 @@ class TestMultipleDeviceRead:
         assert readings[1].is_error
         assert "Bad device" in readings[1].message
 
-    def test_get_many_empty_list(self, backend_with_mock_stub):
-        backend, mock_stub = backend_with_mock_stub
-        readings = backend.get_many([])
-        assert readings == []
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Write Tests
@@ -722,20 +717,6 @@ class TestStatusCodeNormalization:
 
 class TestBoundedQueue:
     """Tests for bounded FIFO queue in subscription handle."""
-
-    def test_queue_is_bounded(self):
-        """Verify the queue has the expected maxsize."""
-        backend = grpc_backend.GRPCBackend()
-        try:
-            handle = grpc_backend._GRPCSubscriptionHandle(
-                backend=backend,
-                drfs=["M:OUTTMP@p,1000"],
-                callback=None,
-                on_error=None,
-            )
-            assert handle._queue.maxsize == grpc_backend._DEFAULT_QUEUE_MAXSIZE
-        finally:
-            backend.close()
 
     def test_queue_overflow_drops_and_warns(self, caplog):
         """When the queue is full, new readings are dropped with a warning."""

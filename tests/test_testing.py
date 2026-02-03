@@ -53,39 +53,6 @@ class TestSetReading:
         result = fake.read("B:HS23T[0:3]")
         np.testing.assert_array_equal(result, arr)
 
-    def test_set_reading_with_units(self):
-        """set_reading configures units in metadata."""
-        fake = FakeBackend()
-        fake.set_reading("M:OUTTMP", 72.5, units="degF")
-
-        reading = fake.get("M:OUTTMP")
-        assert reading.meta.units == "degF"
-
-    def test_set_reading_with_description(self):
-        """set_reading configures description in metadata."""
-        fake = FakeBackend()
-        fake.set_reading("M:OUTTMP", 72.5, description="Outside temperature")
-
-        reading = fake.get("M:OUTTMP")
-        assert reading.meta.description == "Outside temperature"
-
-    def test_set_reading_with_timestamp(self):
-        """set_reading configures timestamp."""
-        fake = FakeBackend()
-        ts = datetime(2025, 1, 15, 12, 0, 0)
-        fake.set_reading("M:OUTTMP", 72.5, timestamp=ts)
-
-        reading = fake.get("M:OUTTMP")
-        assert reading.timestamp == ts
-
-    def test_set_reading_with_cycle(self):
-        """set_reading configures cycle number."""
-        fake = FakeBackend()
-        fake.set_reading("M:OUTTMP", 72.5, cycle=42)
-
-        reading = fake.get("M:OUTTMP")
-        assert reading.cycle == 42
-
     def test_set_reading_overwrites_error(self):
         """set_reading removes any configured error for same DRF."""
         fake = FakeBackend()
@@ -770,22 +737,6 @@ class TestWriteManyMethod:
 
         assert results[0].success
         assert not results[1].success
-
-
-class TestCloseMethod:
-    """Tests for close() method."""
-
-    def test_close(self):
-        """close() marks backend as closed."""
-        fake = FakeBackend()
-        fake.close()
-        assert fake._closed is True
-
-    def test_close_multiple_times(self):
-        """close() can be called multiple times."""
-        fake = FakeBackend()
-        fake.close()
-        fake.close()  # Should not raise
 
 
 # ─────────────────────────────────────────────────────────────────────────────

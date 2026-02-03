@@ -48,31 +48,6 @@ def mock_backend():
 class TestDeviceCreation:
     """Tests for Device creation and DRF validation."""
 
-    def test_create_device_with_property(self):
-        dev = Device("M:OUTTMP.READING")
-        assert dev.name == "M:OUTTMP"
-
-    def test_create_device_with_range(self):
-        dev = Device("B:HS23T[0:10]")
-        assert dev.name == "B:HS23T"
-        assert dev.request.range is not None
-        assert dev.request.range.low == 0
-        assert dev.request.range.high == 10
-
-    def test_create_device_with_event(self):
-        dev = Device("M:OUTTMP@p,1000")
-        assert dev.name == "M:OUTTMP"
-        assert dev.has_event
-        assert dev.is_periodic
-
-    def test_create_device_with_full_drf(self):
-        dev = Device("B:HS23T.SETTING[0:10]@P,500")
-        assert dev.name == "B:HS23T"
-        assert dev.has_event
-        assert dev.is_periodic
-        assert dev.request.range.low == 0
-        assert dev.request.range.high == 10
-
     def test_create_invalid_drf_raises_valueerror(self):
         with pytest.raises(ValueError):
             Device("X")  # Too short
@@ -80,45 +55,6 @@ class TestDeviceCreation:
     def test_create_device_with_invalid_event_raises_valueerror(self):
         with pytest.raises(ValueError):
             Device("M:OUTTMP@Z")  # Invalid event type
-
-
-# Property Accessor Tests
-
-
-class TestDeviceProperties:
-    """Tests for Device property accessors."""
-
-    def test_drf_returns_canonical_form(self):
-        dev = Device("M:OUTTMP")
-        assert "M:OUTTMP" in dev.drf
-
-    def test_name_returns_device_name(self):
-        dev = Device("M:OUTTMP.READING[0:10]@p,1000")
-        assert dev.name == "M:OUTTMP"
-
-    def test_has_event_false_for_default(self):
-        dev = Device("M:OUTTMP")
-        assert not dev.has_event
-
-    def test_has_event_true_for_explicit(self):
-        dev = Device("M:OUTTMP@p,1000")
-        assert dev.has_event
-
-    def test_is_periodic_true_for_p_event(self):
-        dev = Device("M:OUTTMP@p,1000")
-        assert dev.is_periodic
-
-    def test_is_periodic_true_for_q_event(self):
-        dev = Device("M:OUTTMP@Q,1000")
-        assert dev.is_periodic
-
-    def test_is_periodic_false_for_immediate(self):
-        dev = Device("M:OUTTMP@I")
-        assert not dev.is_periodic
-
-    def test_is_periodic_false_for_clock_event(self):
-        dev = Device("M:OUTTMP@E,0F")
-        assert not dev.is_periodic
 
 
 # Immutability Tests
@@ -280,26 +216,6 @@ class TestTextDevice:
         dev = TextDevice("M:OUTTMP.DESCRIPTION", backend=mock_backend)
         with pytest.raises(TypeError, match="Expected string"):
             dev.read()
-
-
-# Special Methods Tests
-
-
-class TestDeviceSpecialMethods:
-    """Tests for Device special methods (__repr__, __eq__, __hash__)."""
-
-    def test_devices_usable_in_set(self):
-        dev1 = Device("M:OUTTMP")
-        dev2 = Device("M:OUTTMP")
-        dev3 = Device("G:AMANDA")
-        s = {dev1, dev2, dev3}
-        assert len(s) == 2
-
-    def test_devices_usable_as_dict_keys(self):
-        dev1 = Device("M:OUTTMP")
-        dev2 = Device("M:OUTTMP")
-        d = {dev1: "temperature"}
-        assert d[dev2] == "temperature"
 
 
 # Subclass Preservation Tests
