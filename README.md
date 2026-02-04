@@ -82,15 +82,6 @@ with pacsys.dpm(auth=KerberosAuth(), role="testing") as backend:
 pip install pacsys
 ```
 
-## Backends
-
-| Backend | Protocol | Use Case |
-|---------|----------|----------|
-| **DPM/HTTP** | TCP + binary | General use (default) |
-| **DPM/gRPC** | gRPC + Protobuf | High-performance with JWT auth |
-| **DMQ** | RabbitMQ + binary | Legacy AMQP backend separate from DPM |
-| **ACL** | HTTP/CGI | Quick read-only access |
-
 ## Requirements
 
 - Python 3.10+
