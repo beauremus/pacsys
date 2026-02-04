@@ -12,7 +12,9 @@ class DRF_EXTRA(Enum):
     REDIR = auto()
     MIRROR = auto()
 
+
 DRF_EXTRA_NAMES = {el.name: el for el in DRF_EXTRA}
+
 
 def parse_extra(raw_string: str) -> DRF_EXTRA:
     if raw_string not in DRF_EXTRA_NAMES:
