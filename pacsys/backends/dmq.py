@@ -1352,7 +1352,7 @@ class DMQBackend(Backend):
         channel.basic_ack(method.delivery_tag)
 
         # Skip heartbeats (server sends Q routing key periodically)
-        rk: str = method.routing_key  # type: ignore[assignment]
+        rk: str = method.routing_key
         if rk == "Q":
             return
 
@@ -1831,7 +1831,7 @@ class DMQBackend(Backend):
     ) -> None:
         """Handle incoming message for subscription (runs in IO thread)."""
         channel.basic_ack(method.delivery_tag)
-        result = _resolve_reply(method.routing_key, body, sub.drfs, sub.drf_to_idx)  # type: ignore[arg-type]
+        result = _resolve_reply(method.routing_key, body, sub.drfs, sub.drf_to_idx)
         if result is None:
             return
         reply, idx, ref_id = result

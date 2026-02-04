@@ -88,7 +88,7 @@ _DEFAULT_QUEUE_MAXSIZE = 10000
 # Kerberos service principal for DPM
 
 
-def _reply_to_value_and_type(reply) -> tuple[Optional[Value], ValueType]:
+def _reply_to_value_and_type(reply) -> tuple[Optional[Value], Optional[ValueType]]:
     """Extract value and type from a DPM data reply."""
     if isinstance(reply, Scalar_reply):
         return reply.data, ValueType.SCALAR
@@ -1181,6 +1181,7 @@ class DPMHTTPBackend(Backend):
             apply_reply = None
 
             try:
+                assert list_id is not None, "list_id must be set after connect"
                 result = self._execute_write(conn, list_id, prepared_settings, deadline)
                 apply_reply = result
 

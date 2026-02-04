@@ -103,7 +103,7 @@ invalid-return-type = "warn"
 invalid-method-override = "warn"
 
 [[tool.ty.overrides]]
-include = ["pacsys/dpm_protocol.py"]
+include = ["pacsys/dpm_protocol.py", "pacsys/backends/dmq_protocol.py"]
 [tool.ty.overrides.rules]
 unresolved-attribute = "ignore"
 
