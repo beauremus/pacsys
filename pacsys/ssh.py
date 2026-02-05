@@ -27,9 +27,12 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, Optional, Union
+from typing import TYPE_CHECKING, Iterator, Optional, Union
 
 import paramiko
+
+if TYPE_CHECKING:
+    from pacsys.acl_session import ACLSession
 
 logger = logging.getLogger(__name__)
 
@@ -288,6 +291,131 @@ class SFTPSession:
 
     def __exit__(self, *exc):
         self.close()
+
+
+# ---------------------------------------------------------------------------
+# RemoteProcess
+# ---------------------------------------------------------------------------
+
+
+class RemoteProcess:
+    """Persistent interactive process over SSH. Dumb bidirectional pipe.
+
+    Not thread-safe. Context manager. Does NOT own SSHClient.
+
+    Args:
+        ssh: Connected SSHClient instance
+        command: Command to execute on the remote host
+        timeout: Default timeout for read operations in seconds
+    """
+
+    def __init__(self, ssh: SSHClient, command: str, *, timeout: float = 30.0):
+        self._channel = ssh.open_channel(command, timeout=timeout)
+        self._timeout = timeout
+        self._buf = b""
+        self._closed = False
+
+    def send_line(self, line: str) -> None:
+        """Send line + newline."""
+        self._channel.sendall(f"{line}\n".encode())
+
+    def send_bytes(self, data: bytes) -> None:
+        """Send raw bytes."""
+        self._channel.sendall(data)
+
+    def read_until(self, marker: bytes, timeout: float | None = None) -> bytes:
+        """Read until marker found in stream, return bytes before marker.
+
+        Marker is consumed from buffer.
+
+        Raises:
+            SSHTimeoutError: If timeout expires before marker found
+            SSHError: If channel closes before marker found
+        """
+        t = timeout if timeout is not None else self._timeout
+        deadline = time.monotonic() + t
+
+        while True:
+            idx = self._buf.find(marker)
+            if idx >= 0:
+                output = self._buf[:idx]
+                self._buf = self._buf[idx + len(marker) :]
+                return output
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise SSHTimeoutError(
+                    f"Timed out waiting for marker {marker!r} after {t}s (buffer tail: {self._buf[-200:]!r})"
+                )
+
+            self._drain_stderr()
+
+            if self._channel.recv_ready():
+                data = self._channel.recv(65536)
+                if not data:
+                    raise SSHError(f"Channel closed while waiting for marker {marker!r}")
+                self._buf += data
+            elif self._channel.closed or self._channel.exit_status_ready():
+                raise SSHError(
+                    f"Process exited while waiting for marker {marker!r} (buffer tail: {self._buf[-200:]!r})"
+                )
+            else:
+                self._channel.status_event.wait(min(0.05, remaining))
+
+    def read_for(self, seconds: float) -> bytes:
+        """Read all data arriving within timeout. Returns on idle."""
+        deadline = time.monotonic() + seconds
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+
+            self._drain_stderr()
+
+            if self._channel.recv_ready():
+                data = self._channel.recv(65536)
+                if not data:
+                    break
+                self._buf += data
+            elif self._channel.closed or self._channel.exit_status_ready():
+                break
+            else:
+                self._channel.status_event.wait(min(0.05, remaining))
+
+        result = self._buf
+        self._buf = b""
+        return result
+
+    def _drain_stderr(self) -> None:
+        """Drain stderr to prevent deadlock."""
+        while self._channel.recv_stderr_ready():
+            self._channel.recv_stderr(65536)
+
+    @property
+    def alive(self) -> bool:
+        """Process still running."""
+        return not self._closed and not self._channel.closed and not self._channel.exit_status_ready()
+
+    def close(self) -> None:
+        """Close channel (idempotent)."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._channel.close()
+        except Exception:
+            pass
+
+    def __enter__(self) -> RemoteProcess:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def __repr__(self) -> str:
+        state = "alive" if self.alive else "closed"
+        return f"RemoteProcess({state})"
 
 
 # ---------------------------------------------------------------------------
@@ -645,6 +773,18 @@ class SSHClient:
         chan.exec_command(command)
         return chan
 
+    def remote_process(self, command: str, *, timeout: float = 30.0) -> RemoteProcess:
+        """Open a persistent interactive process over SSH.
+
+        Args:
+            command: Command to execute on the remote host
+            timeout: Default timeout for read operations in seconds
+
+        Returns:
+            RemoteProcess (use as context manager or call close())
+        """
+        return RemoteProcess(self, command, timeout=timeout)
+
     def acl(self, command: str | list[str], timeout: float | None = None) -> str:
         """Execute ACL command(s) and return output text.
 
@@ -698,11 +838,12 @@ class SSHClient:
         finally:
             self.exec(f"rm -f {name}", timeout=5.0)
 
-    def acl_session(self, *, timeout: float = 30.0):
+    def acl_session(self, *, timeout: float = 30.0) -> ACLSession:
         """Open a persistent ACL interpreter session.
 
-        The session keeps an ``acl`` process alive over an SSH channel.
-        State (variables, symbols) persists between send() calls.
+        The session keeps an ``acl`` process alive over an SSH channel,
+        avoiding process startup overhead. Each send() is a separate
+        script execution - state does NOT persist between calls.
 
         Args:
             timeout: Default timeout for prompt detection in seconds
@@ -760,5 +901,6 @@ __all__ = [
     "CommandResult",
     "Tunnel",
     "SFTPSession",
+    "RemoteProcess",
     "SSHClient",
 ]

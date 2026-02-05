@@ -59,7 +59,7 @@ See the [ACL command reference](https://www-bd.fnal.gov/issues/wiki/ACLCommands)
 
 ## URL Encoding
 
-The ACL CGI only decodes `+`/`%20` (space) and `%27` (quote) from the query string. General `%XX` sequences like `%3A` are **not** decoded — DRF characters (`:`, `[]`, `@`, `.`) must be sent raw. The backend handles this automatically for `read`/`get`/`get_many`.
+The ACL CGI only decodes `+`/`%20` (space) and `%27` (quote) from the query string. General `%XX` sequences like `%3A` are **not** decoded - DRF characters (`:`, `[]`, `@`, `.`) must be sent raw. The backend handles this automatically for `read`/`get`/`get_many`.
 
 ## Limitations
 

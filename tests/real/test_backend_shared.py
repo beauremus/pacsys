@@ -167,7 +167,7 @@ class TestBackendValueTypes:
 
     # ACL CGI doesn't understand qualifier chars (~|@$) but _acl_read_prefix
     # canonicalizes them to explicit .PROPERTY names. Status/alarm properties
-    # still can't return structured dicts — ACL returns plain text for those.
+    # still can't return structured dicts - ACL returns plain text for those.
     _ACL_UNSUPPORTED_PROPERTIES = {
         DRF_PROPERTY.ANALOG,
         DRF_PROPERTY.DIGITAL,

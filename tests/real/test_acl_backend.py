@@ -4,7 +4,7 @@ Integration tests for ACL backend against the real CGI endpoint.
 The ACL CGI endpoint (www-bd.fnal.gov) is only accessible from the Fermilab
 network. These tests will auto-skip when the endpoint is unreachable.
 
-NOTE: acl.pl is blocked externally — proxy access will be needed for
+NOTE: acl.pl is blocked externally - proxy access will be needed for
 CI/remote testing.
 
 Run:
@@ -28,7 +28,7 @@ from .devices import (
 
 
 # =============================================================================
-# URL format verification (offline — no server needed)
+# URL format verification (offline - no server needed)
 # =============================================================================
 
 
@@ -103,7 +103,7 @@ class TestACLLiveReads:
             acl_backend.read("Z:DOESNOTEXIST99", timeout=TIMEOUT_READ)
 
     def test_read_alarm_field(self, acl_backend):
-        """Read .MAX alarm field — returns numeric value."""
+        """Read .MAX alarm field - returns numeric value."""
         value = acl_backend.read(f"{SCALAR_DEVICE_3}.MAX", timeout=TIMEOUT_READ)
         assert isinstance(value, (int, float))
 

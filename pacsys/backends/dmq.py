@@ -474,7 +474,7 @@ class _DMQSubscriptionHandle(SubscriptionHandle):
                 break  # timeout == 0 or user timeout expired
 
             if reading is None:
-                break  # sentinel — stop requested
+                break  # sentinel - stop requested
 
             yield (reading, self)
 

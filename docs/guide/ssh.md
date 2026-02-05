@@ -140,6 +140,180 @@ with client.sftp() as sftp:
     print(info.st_size)
 ```
 
+## Interactive Processes
+
+`RemoteProcess` is a persistent bidirectional byte pipe over SSH. Use it for
+interactive programs that read stdin and write stdout (REPLs, calculators,
+custom protocols). It does not decode bytes -- that's the caller's job.
+
+```python
+with pacsys.ssh("host.fnal.gov") as client:
+    with client.remote_process("bc -q") as proc:
+        proc.send_line("2 + 3")
+        result = proc.read_until(b"\n", timeout=5.0)
+        print(result)  # b"5"
+
+        proc.send_line("10 * 20")
+        result = proc.read_until(b"\n", timeout=5.0)
+        print(result)  # b"200"
+```
+
+### Reading Data
+
+**`read_until(marker, timeout)`** -- reads bytes until `marker` is found in the
+stream. Returns everything *before* the marker; the marker itself is consumed
+from the internal buffer. Useful when the remote process emits a known prompt
+or delimiter.
+
+```python
+with client.remote_process("my_app") as proc:
+    proc.send_line("run_query")
+    output = proc.read_until(b"PROMPT> ", timeout=10.0)
+    print(output.decode())
+```
+
+**`read_for(seconds)`** -- reads everything that arrives within the given
+wall-clock duration. Returns accumulated bytes. Useful when there's no
+predictable marker.
+
+```python
+with client.remote_process("echo hello; sleep 0.5; echo world") as proc:
+    data = proc.read_for(2.0)
+    print(data)  # b"hello\nworld\n"
+```
+
+### Sending Data
+
+```python
+proc.send_line("command")        # sends "command\n" encoded as bytes
+proc.send_bytes(b"\x00\x01\x02")  # sends raw bytes (no newline)
+```
+
+### Lifecycle
+
+```python
+# As context manager (recommended)
+with client.remote_process("cat") as proc:
+    assert proc.alive
+    proc.send_line("hello")
+    proc.read_until(b"\n")
+# channel closed automatically
+
+# Manual lifecycle
+proc = client.remote_process("cat")
+proc.send_line("hello")
+proc.close()  # idempotent
+proc.close()  # safe to call again
+```
+
+### Multiple Processes
+
+Paramiko multiplexes channels on a single transport, so multiple processes
+can coexist on one `SSHClient`:
+
+```python
+with client.remote_process("bc -q") as calc:
+    with client.remote_process("cat") as echo:
+        calc.send_line("6 * 7")
+        echo.send_line("hello")
+        print(calc.read_until(b"\n"))  # b"42"
+        print(echo.read_until(b"\n"))  # b"hello"
+```
+
+### Error Handling
+
+| Exception | When |
+|-----------|------|
+| `SSHTimeoutError` | `read_until` timeout expires before marker found |
+| `SSHError` | Channel closes or process exits before marker found |
+
+```python
+from pacsys.ssh import SSHTimeoutError, SSHError
+
+with client.remote_process("cat") as proc:
+    try:
+        proc.read_until(b"NEVER", timeout=1.0)
+    except SSHTimeoutError:
+        print("Marker not found in time")
+```
+
+### Notes
+
+- Not thread-safe -- use separate processes per thread
+- Does NOT own the `SSHClient` -- closing the process does not close the SSH connection
+- Stderr is drained automatically to prevent deadlock (contents are discarded)
+- The `timeout` parameter on the constructor is passed to `open_channel()` and
+  used as the default for `read_until()` calls
+
+## ACL over SSH
+
+Execute [ACL](https://www-bd.fnal.gov/issues/wiki/ACL) commands on remote
+ACNET console hosts via SSH.
+
+### One-Shot Commands
+
+`SSHClient.acl()` runs a fresh `acl` process per call. Accepts a string or a
+list of strings (written to a temp script file):
+
+```python
+with pacsys.ssh(["jump.fnal.gov", "clx01.fnal.gov"]) as ssh:
+    # Single command
+    output = ssh.acl("read M:OUTTMP")
+    print(output)  # "M:OUTTMP       =  72.500 DegF"
+
+    # Semicolons (treated as one line)
+    output = ssh.acl("read M:OUTTMP; read G:AMANDA")
+
+    # List of commands (written to temp script file)
+    output = ssh.acl(["read M:OUTTMP", "read G:AMANDA"])
+```
+
+### Persistent Sessions
+
+`ACLSession` keeps an `acl` process alive via `RemoteProcess`, avoiding the
+startup overhead of launching a new process per command. Each `send()` is a
+separate script execution - state (variables, symbols) does **not** persist
+between calls. Combine dependent commands with semicolons in a single `send()`:
+
+```python
+with pacsys.ssh(["jump.fnal.gov", "clx01.fnal.gov"]) as ssh:
+    with ssh.acl_session() as acl:
+        # Each send() is separate - use semicolons for dependencies
+        acl.send("read M:OUTTMP")
+        acl.send("value = M:OUTTMP ; if (value > 100) set M:OUTTMP 100; endif")
+```
+
+Multiple sessions can coexist on one SSH connection:
+
+```python
+with ssh.acl_session() as acl1:
+    with ssh.acl_session() as acl2:
+        r1 = acl1.send("read M:OUTTMP")
+        r2 = acl2.send("read G:AMANDA")
+```
+
+### ACL Error Handling
+
+Both `acl()` and `ACLSession.send()` raise `ACLError` on failures:
+
+```python
+from pacsys.errors import ACLError
+
+with ssh.acl_session() as acl:
+    try:
+        acl.send("read Z:NOTFOUND")
+    except ACLError as e:
+        print(f"ACL error: {e}")
+```
+
+Sending on a closed session also raises `ACLError`:
+
+```python
+session = ssh.acl_session()
+session.close()
+session.send("read M:OUTTMP")  # raises ACLError("ACL session is closed")
+```
+
 ## Authentication
 
 ### Kerberos (Default)

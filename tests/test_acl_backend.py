@@ -47,7 +47,7 @@ class TestACLBackendInit:
 
 
 class TestParseACLLine:
-    """Tests for _parse_acl_line — parses full ACL output lines."""
+    """Tests for _parse_acl_line - parses full ACL output lines."""
 
     @pytest.mark.parametrize(
         "line,expected_value,expected_type",
@@ -114,7 +114,7 @@ class TestIsErrorResponse:
 
 
 class TestAclReadCommand:
-    """Tests for _acl_read_command — DRF to ACL command + qualifier mapping."""
+    """Tests for _acl_read_command - DRF to ACL command + qualifier mapping."""
 
     def test_plain_device(self):
         cmd, drf, quals = _acl_read_command("M:OUTTMP")
@@ -170,7 +170,7 @@ class TestAclReadCommand:
 
 
 class TestParseRawHex:
-    """Tests for _parse_raw_hex — parses ACL /raw hex output."""
+    """Tests for _parse_raw_hex - parses ACL /raw hex output."""
 
     @pytest.mark.parametrize(
         "line,expected",
@@ -329,7 +329,7 @@ class TestRawRead:
 
 
 class TestMultipleDeviceRead:
-    """Tests for get_many — batch and fallback behavior."""
+    """Tests for get_many - batch and fallback behavior."""
 
     def test_batch_success(self):
         """All devices succeed in a single batch request."""
@@ -452,7 +452,7 @@ class TestContextManager:
 
 
 class TestIsBasicStatusRequest:
-    """Tests for _is_basic_status_request — detects bare STATUS DRFs."""
+    """Tests for _is_basic_status_request - detects bare STATUS DRFs."""
 
     @pytest.mark.parametrize(
         "drf,expected",
@@ -520,7 +520,7 @@ class TestBasicStatusRead:
         """First non-NOATT error (DBM_NOREC) immediately fails the whole read."""
         error_line = "Invalid device name (Z:NOTFND) in read device command at line 1 - DBM_NOREC"
         with mock.patch("urllib.request.urlopen") as mock_urlopen:
-            # Only 1 response needed — first field error aborts
+            # Only 1 response needed - first field error aborts
             mock_urlopen.return_value = MockACLResponse(error_line)
             with ACLBackend() as backend:
                 reading = backend.get("Z:NOTFND.STATUS")
@@ -533,7 +533,7 @@ class TestBasicStatusRead:
             mock_urlopen.side_effect = [
                 MockACLResponse("N:LGXS is on = True"),
                 MockACLResponse("N:LGXS is ready = True"),
-                # Unexpected error on REMOTE — should fail immediately
+                # Unexpected error on REMOTE - should fail immediately
                 MockACLResponse("Error in read device command - DIO_NOSCALE"),
             ]
             with ACLBackend() as backend:

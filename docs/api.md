@@ -181,3 +181,85 @@ Object-oriented interface for device access.
     options:
       show_root_heading: true
       heading_level: 3
+
+---
+
+## SSH Utility
+
+### SSHClient
+
+::: pacsys.ssh.SSHClient
+    options:
+      show_root_heading: true
+      heading_level: 3
+      members:
+        - exec
+        - exec_stream
+        - exec_many
+        - forward
+        - sftp
+        - open_channel
+        - remote_process
+        - acl_session
+        - acl
+        - close
+
+### RemoteProcess
+
+::: pacsys.ssh.RemoteProcess
+    options:
+      show_root_heading: true
+      heading_level: 3
+      members:
+        - send_line
+        - send_bytes
+        - read_until
+        - read_for
+        - alive
+        - close
+
+### SSHHop
+
+::: pacsys.ssh.SSHHop
+    options:
+      show_root_heading: true
+      heading_level: 3
+
+### CommandResult
+
+::: pacsys.ssh.CommandResult
+    options:
+      show_root_heading: true
+      heading_level: 3
+
+### ACLSession
+
+::: pacsys.acl_session.ACLSession
+    options:
+      show_root_heading: true
+      heading_level: 3
+      members:
+        - send
+        - close
+
+### SSH Exceptions
+
+::: pacsys.ssh.SSHError
+    options:
+      show_root_heading: true
+      heading_level: 4
+
+::: pacsys.ssh.SSHConnectionError
+    options:
+      show_root_heading: true
+      heading_level: 4
+
+::: pacsys.ssh.SSHCommandError
+    options:
+      show_root_heading: true
+      heading_level: 4
+
+::: pacsys.ssh.SSHTimeoutError
+    options:
+      show_root_heading: true
+      heading_level: 4

@@ -1,18 +1,20 @@
 """Persistent ACL interpreter session over SSH.
 
-Keeps an ``acl`` process alive on a remote host, allowing stateful
-multi-command workflows where variables and symbols persist between calls.
+Keeps an ``acl`` process alive on a remote host, avoiding the startup
+overhead of launching a new process per command. Each ``send()`` call
+is a separate script execution - state (variables, symbols) does NOT
+persist between calls. Use semicolons to combine dependent commands
+in a single ``send()``.
 
 Example:
     with ssh.acl_session() as acl:
-        acl.send("value = M:OUTTMP")
-        acl.send("if (value > 100) set M:OUTTMP 100; endif")
+        acl.send("read M:OUTTMP")
+        acl.send("value = M:OUTTMP ; if (value > 100) set M:OUTTMP 100; endif")
 """
 
 from __future__ import annotations
 
 import logging
-import time
 from typing import TYPE_CHECKING
 
 from pacsys.errors import ACLError
@@ -37,11 +39,15 @@ def _strip_acl_output(text: str) -> str:
 class ACLSession:
     """Persistent ACL interpreter session over SSH.
 
-    Opens an ``acl`` process on a remote host via SSH and keeps it alive
-    for stateful interaction. Multiple sessions can coexist on the same
-    SSHClient (paramiko multiplexes channels on a single transport).
+    Opens an ``acl`` process on a remote host via SSH and keeps it alive,
+    avoiding process startup overhead. Each ``send()`` is a separate script
+    execution - state (variables, symbols) does NOT persist between calls.
+    Combine dependent commands with semicolons in a single ``send()``.
 
-    Not thread-safe — do not share a single session across threads.
+    Multiple sessions can coexist on the same SSHClient (paramiko multiplexes
+    channels on a single transport).
+
+    Not thread-safe - do not share a single session across threads.
     Use separate sessions per thread instead.
 
     Args:
@@ -59,14 +65,18 @@ class ACLSession:
     """
 
     def __init__(self, ssh: SSHClient, *, timeout: float = 30.0):
-        self._ssh = ssh
+        from pacsys.ssh import RemoteProcess
+
+        self._proc = RemoteProcess(ssh, "acl", timeout=timeout)
         self._timeout = timeout
-        self._channel = ssh.open_channel("acl", timeout=timeout)
-        self._buf = b""
         self._closed = False
 
         # Wait for initial ACL> prompt to confirm ACL started
-        self._wait_for_prompt(timeout)
+        try:
+            self._proc.read_until(_ACL_PROMPT, timeout=timeout)
+        except Exception as e:
+            self._proc.close()
+            raise ACLError(f"Failed to start ACL session: {e}") from e
         logger.debug("ACL session opened")
 
     def send(self, command: str, timeout: float | None = None) -> str:
@@ -87,15 +97,20 @@ class ACLSession:
 
         effective_timeout = timeout if timeout is not None else self._timeout
 
-        self._channel.sendall(f"{command}\n".encode())
-        raw = self._wait_for_prompt(effective_timeout)
+        try:
+            self._proc.send_line(command)
+            raw = self._proc.read_until(_ACL_PROMPT, timeout=effective_timeout)
+        except ACLError:
+            raise
+        except Exception as e:
+            raise ACLError(str(e)) from e
 
         # Decode and strip echoed command (first line) from output
         text = raw.decode(errors="replace").strip()
         if "\n" in text:
             text = text.split("\n", 1)[1].strip()
         else:
-            # Output is only the echoed command — no actual output
+            # Output is only the echoed command - no actual output
             text = ""
         return text
 
@@ -104,59 +119,8 @@ class ACLSession:
         if self._closed:
             return
         self._closed = True
-        try:
-            self._channel.close()
-        except Exception:
-            pass
+        self._proc.close()
         logger.debug("ACL session closed")
-
-    def _wait_for_prompt(self, timeout: float) -> bytes:
-        """Read from channel until ``\\nACL> `` prompt appears.
-
-        Buffers raw bytes to avoid corrupting multi-byte characters split
-        across recv() boundaries. Also drains stderr to prevent deadlock.
-
-        Returns:
-            Raw bytes received before the prompt marker
-
-        Raises:
-            ACLError: If timeout expires or channel closes before prompt
-        """
-        deadline = time.monotonic() + timeout
-
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise ACLError(f"Timed out waiting for ACL prompt after {timeout}s (buffer: {self._buf[-200:]!r})")
-
-            # Check if channel is still open
-            if self._channel.closed or self._channel.exit_status_ready():
-                raise ACLError(f"ACL process exited unexpectedly (buffer: {self._buf[-200:]!r})")
-
-            got_data = False
-
-            # Read stdout
-            if self._channel.recv_ready():
-                data = self._channel.recv(65536)
-                if not data:
-                    raise ACLError("ACL channel closed (received empty data)")
-                self._buf += data
-                got_data = True
-
-            # Drain stderr to prevent deadlock
-            if self._channel.recv_stderr_ready():
-                self._channel.recv_stderr(65536)
-                got_data = True
-
-            if not got_data:
-                self._channel.status_event.wait(min(0.05, remaining))
-
-            # Check for prompt in bytes buffer
-            idx = self._buf.find(_ACL_PROMPT)
-            if idx >= 0:
-                output = self._buf[:idx]
-                self._buf = self._buf[idx + len(_ACL_PROMPT) :]
-                return output
 
     def __enter__(self) -> ACLSession:
         return self

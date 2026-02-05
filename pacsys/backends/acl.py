@@ -101,7 +101,7 @@ def _is_raw_field(drf: str) -> bool:
 def _acl_read_command(drf: str) -> tuple[str, str, str]:
     """Build ACL read command, cleaned DRF, and device-level qualifiers.
 
-    ACL syntax is ``read+DEVICE/qualifier1/qualifier2`` — all qualifiers
+    ACL syntax is ``read+DEVICE/qualifier1/qualifier2`` - all qualifiers
     go **after** the device name.  Placing ``/ftd=`` or ``/event=`` before
     the device produces ``CLIB_SYNTAX``.
 
@@ -355,10 +355,10 @@ class ACLBackend(Backend):
         Batch:    ``?acl=read+DEV1/q1\\;read+DEV2/q2``
 
         Qualifiers (``/raw``, ``/ftd=evtXX``) must come **after** the device
-        name — ACL rejects them before the device (CLIB_SYNTAX).
+        name - ACL rejects them before the device (CLIB_SYNTAX).
         """
         # The ACL CGI only decodes spaces (+/%20) and quotes (%27) from the
-        # query string — general %XX sequences like %3A are NOT decoded.
+        # query string - general %XX sequences like %3A are NOT decoded.
         # DRF characters (colons, brackets, etc.) must be sent raw.
         commands = []
         for drf in drfs:
@@ -484,7 +484,7 @@ class ACLBackend(Backend):
         try:
             response_text = self._fetch(url, effective_timeout)
         except DeviceError as e:
-            # HTTP-level error — all devices fail
+            # HTTP-level error - all devices fail
             return [
                 Reading(
                     drf=drf,
@@ -593,7 +593,7 @@ class ACLBackend(Backend):
             url = self._build_url([f"{device}.STATUS.{field}"])
             line = self._fetch(url, timeout).strip().splitlines()[0]
 
-            # DIO_NOATT means the device lacks this attribute — omit the
+            # DIO_NOATT means the device lacks this attribute - omit the
             # key, matching DPM behavior.  The response format includes the
             # device name before the error code ("- Z:ACLTST DIO_NOATT"),
             # so we check the line directly rather than relying on

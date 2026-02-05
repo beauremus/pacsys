@@ -86,12 +86,6 @@ class TestACLSession:
         yield client
         client.close()
 
-    def test_simple_read(self):
-        with self.ssh.acl_session() as acl:
-            output = acl.send("read M:OUTTMP")
-            print(f"  session read: {output}")
-            assert "M:OUTTMP" in output
-
     def test_variable_within_script(self):
         """Variables work within a single script (semicolon-separated)."""
         with self.ssh.acl_session() as acl:
@@ -109,7 +103,7 @@ class TestACLSession:
             assert "G:AMANDA" in r2
 
     def test_multiple_sessions_on_same_ssh(self):
-        """Paramiko multiplexes channels — multiple sessions should work."""
+        """Paramiko multiplexes channels - multiple sessions should work."""
         with self.ssh.acl_session() as acl1:
             with self.ssh.acl_session() as acl2:
                 r1 = acl1.send("read M:OUTTMP")

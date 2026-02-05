@@ -28,17 +28,12 @@ dev = Device("M:OUTTMP")
 # Read different properties
 temperature = dev.read()               # READING (scaled value)
 setpoint = dev.setting()               # SETTING property
-is_on = dev.status(field="on")         # STATUS: single bool
+is_on = dev.status(field="on")         # STATUS field ON
 alarm = dev.analog_alarm()             # ANALOG alarm
-desc = dev.description()               # DESCRIPTION string
 
 # Full reading with metadata
 reading = dev.get()
 print(f"{reading.value} {reading.units}")
-
-# Typed devices enforce return types
-temp = ScalarDevice("M:OUTTMP")        # read() -> float
-arr = ArrayDevice("B:IRMS06[0:10]")    # read() -> np.ndarray
 
 # Write with automatic readback verification
 with pacsys.dpm(auth=KerberosAuth(), role="testing") as backend:
@@ -74,6 +69,23 @@ with pacsys.subscribe(["M:OUTTMP@p,1000"]) as stream:
 from pacsys import KerberosAuth
 with pacsys.dpm(auth=KerberosAuth(), role="testing") as backend:
     backend.write("Z:ACLTST", 72.5)
+```
+
+## SSH Utilities
+
+Port tunneling, SFTP, and interactive processes over multi-hop SSH.
+
+```python
+import pacsys
+
+# Execute commands with automatic Kerberos auth
+with pacsys.ssh(["jump.fnal.gov", "target.fnal.gov"]) as ssh:
+    result = ssh.exec("hostname")
+    print(result.stdout) # target
+
+# ACL can be run on the fly - beam switch, DB, etc.
+with pacsys.ssh("clx01.fnal.gov") as ssh:
+    result = ssh.acl("read M:OUTTMP") # "M:OUTTMP       =  72.500 DegF"
 ```
 
 ## Installation
