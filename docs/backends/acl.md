@@ -5,13 +5,13 @@ HTTP-based read-only access via the ACL CGI script. ACL is a separate service on
 ```mermaid
 sequenceDiagram
     participant App as Your App
-    participant CGI as www-ad.fnal.gov<br>/cgi-bin/acl.pl
+    participant CGI as www-bd.fnal.gov<br>/cgi-bin/acl.pl
     participant ACNET as ACNET
 
-    App->>CGI: HTTPS GET ?command=read&drf=...
-    CGI->>ACNET: Device query
-    ACNET-->>CGI: Device value
-    CGI-->>App: Text response
+    App->>CGI: HTTPS GET ?acl=read+{dev1}\;read+{dev2}
+    CGI->>ACNET: Device queries
+    ACNET-->>CGI: Device values
+    CGI-->>App: DEVICE = VALUE UNITS (one per line)
 ```
 
 ## Characteristics
@@ -28,14 +28,46 @@ import pacsys
 
 with pacsys.acl() as backend:
     value = backend.read("M:OUTTMP")
+    reading = backend.get("M:OUTTMP")
     readings = backend.get_many(["M:OUTTMP", "G:AMANDA"])
 ```
 
+## Advanced: Raw ACL Commands
+
+The `execute()` method sends arbitrary ACL command strings directly to the CGI endpoint. The argument is placed verbatim after `?acl=` in the URL. Spaces are `+`, semicolons are `\;`.
+
+```python
+with pacsys.acl() as backend:
+    # Simple read
+    text = backend.execute("read+M:OUTTMP")
+
+    # Batch with device_list + read_list (simultaneous)
+    text = backend.execute(
+        "device_list/create+devs+devices='M:OUTTMP,G:AMANDA'"
+        "\\;read_list/no_name/no_units+device_list=devs"
+    )
+
+    # Historical data from logger
+    text = backend.execute(
+        "logger_get/date_format='utc_seconds'"
+        "/start=%222024-01-01+00:00:00%22"
+        "/end=%222024-01-01+00:01:00%22+M:OUTTMP"
+    )
+```
+
+See the [ACL command reference](https://www-bd.fnal.gov/issues/wiki/ACLCommands) for stuff not possible through regular acnet.
+
+## URL Encoding
+
+The ACL CGI only decodes `+`/`%20` (space) and `%27` (quote) from the query string. General `%XX` sequences like `%3A` are **not** decoded — DRF characters (`:`, `[]`, `@`, `.`) must be sent raw. The backend handles this automatically for `read`/`get`/`get_many`.
+
 ## Limitations
 
-- **URL length**: `get_many()` builds a single HTTP GET URL for all devices. Most servers enforce an ~8 KB URL limit, which allows roughly 700 simple devices or ~190 complex DRF strings per call. Exceeding this returns an HTTP error for all devices in the batch. For large batches, use DPM or gRPC instead.
+- **URL length**: `get_many()` builds a single HTTP GET URL with semicolon-separated `read` commands. Most servers enforce an ~8 KB URL limit (~200 simple devices per call). For large batches, use DPM or gRPC instead.
 - **No writes or streaming**: Read-only, request/response only.
+- **Error handling**: ACL aborts the entire script on the first bad device. `get_many()` detects this and falls back to individual reads so valid devices still return data.
 
 ## When to Use
 
 - Quick one-off reads when there are difficulties installing dependencies
+- Advanced ACL scripting (`execute()`) for logger queries, device lists, etc.

@@ -645,7 +645,7 @@ def acl(
     """Create an ACL backend instance (read-only, no streaming, no auth).
 
     Args:
-        base_url: ACL CGI base URL (default: https://www-ad.fnal.gov/cgi-bin/acl.pl)
+        base_url: ACL CGI base URL (default: https://www-bd.fnal.gov/cgi-bin/acl.pl)
         timeout: Default operation timeout in seconds
 
     Returns:

@@ -14,6 +14,7 @@ Usage:
 """
 
 import logging
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -33,63 +34,88 @@ from pacsys.types import (
 logger = logging.getLogger(__name__)
 
 # Default settings
-DEFAULT_BASE_URL = "https://www-ad.fnal.gov/cgi-bin/acl.pl"
+DEFAULT_BASE_URL = "https://www-bd.fnal.gov/cgi-bin/acl.pl"
 DEFAULT_TIMEOUT = 5.0
 
+# Escaped semicolon for separating ACL commands in CGI URLs.
+# ACL Usage ref: "semicolons used to separate ACL commands should also be
+# escaped by a backslash"
+_ACL_CMD_SEP = "\\;"
 
-def _parse_acl_value(text: str) -> tuple[Value, ValueType]:
-    """
-    Parse ACL response text into a value and type.
+# ACL error codes: DIO_NO_SUCH, CLIB_SYNTAX, DIO_NOSCALE, etc.
+_ACL_ERROR_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$")
 
-    ACL returns plain text which we try to interpret:
-    - Try parsing as float first
-    - If that fails, return as string
 
-    Args:
-        text: Raw response text from ACL
+def _parse_acl_line(text: str) -> tuple[Value, ValueType]:
+    """Parse a single line of ACL output into a value and type.
 
-    Returns:
-        Tuple of (value, ValueType)
+    ACL output format is typically: ``DEVICE = VALUE [UNITS]``
+    For alarm/description fields the format varies but always uses '='.
+    Lines without '=' (e.g. bare numeric from no_name/no_units) are also handled.
     """
     text = text.strip()
 
-    # Try parsing as float
+    # Extract value part after '='
+    if "=" in text:
+        _, _, raw = text.partition("=")
+        raw = raw.strip()
+    else:
+        raw = text
+
+    if not raw:
+        return text, ValueType.TEXT
+
+    # 1. Try whole string as float (e.g. "12.34")
     try:
-        value = float(text)
-        return value, ValueType.SCALAR
+        return float(raw), ValueType.SCALAR
     except ValueError:
         pass
 
-    # Check for array-like response (whitespace or newline separated numbers)
-    parts = text.split()
-    if len(parts) > 1:
+    tokens = raw.split()
+
+    # 2. Try all tokens as floats → array (e.g. "45 2.2 3.0")
+    if len(tokens) > 1:
         try:
-            values = [float(p) for p in parts]
-            return values, ValueType.SCALAR_ARRAY
+            return [float(t) for t in tokens], ValueType.SCALAR_ARRAY
         except ValueError:
             pass
 
-    # Return as text
-    return text, ValueType.TEXT
+    # 3. Try all-but-last as floats → array + units (e.g. "45 2.2 3.0 blip")
+    if len(tokens) > 2:
+        try:
+            return [float(t) for t in tokens[:-1]], ValueType.SCALAR_ARRAY
+        except ValueError:
+            pass
+
+    # 4. Try first token as float → scalar + units (e.g. "12.34 DegF")
+    try:
+        return float(tokens[0]), ValueType.SCALAR
+    except ValueError:
+        pass
+
+    # 5. Text
+    return raw, ValueType.TEXT
 
 
 def _is_error_response(text: str) -> tuple[bool, Optional[str]]:
-    """
-    Check if ACL response indicates an error.
+    """Check if an ACL response line indicates an error.
 
-    Args:
-        text: Raw response text from ACL
+    ACL errors look like::
 
-    Returns:
-        Tuple of (is_error, error_message)
+        ! error message
+        Invalid device name (...) ... - DIO_NO_SUCH
+        Error reading device ... - DIO_NOSCALE
     """
     text = text.strip()
 
-    # ACL errors typically start with "!" or contain "error"
     if text.startswith("!"):
         return True, text[1:].strip()
-    if "error" in text.lower():
-        return True, text
+
+    # ACL errors end with " - ERROR_CODE" (e.g. DIO_NO_SUCH, CLIB_SYNTAX)
+    if " - " in text:
+        error_code = text.rsplit(" - ", 1)[-1].strip()
+        if _ACL_ERROR_CODE_RE.match(error_code):
+            return True, text
 
     return False, None
 
@@ -124,7 +150,7 @@ class ACLBackend(Backend):
         Initialize ACL backend.
 
         Args:
-            base_url: ACL CGI URL (default: https://www-ad.fnal.gov/cgi-bin/acl.pl)
+            base_url: ACL CGI URL (default: https://www-bd.fnal.gov/cgi-bin/acl.pl)
             timeout: HTTP request timeout in seconds (default: 5.0)
 
         Raises:
@@ -160,29 +186,42 @@ class ACLBackend(Backend):
         return self._timeout
 
     def _build_url(self, drfs: list[str]) -> str:
-        """
-        Build ACL URL for one or more devices.
+        """Build ACL CGI URL for one or more devices.
 
-        Args:
-            drfs: List of device request strings
+        ACL ``read`` takes exactly one device; multiple devices are sent as
+        separate ``read`` commands joined by ``\\;`` (escaped semicolon).
 
-        Returns:
-            Complete URL with query parameters
+        Single:   ``?acl=read+DEVICE``
+        Batch:    ``?acl=read+DEV1\\;read+DEV2\\;read+DEV3``
         """
-        # ACL format: acl=read/device1+device2+device3
-        devices = "+".join(urllib.parse.quote(drf, safe="") for drf in drfs)
-        return f"{self._base_url}?acl=read/{devices}"
+        # The ACL CGI only decodes spaces (+/%20) and quotes (%27) from the
+        # query string — general %XX sequences like %3A are NOT decoded.
+        # DRF characters (colons, brackets, etc.) must be sent raw.
+        commands = [f"read+{urllib.parse.quote(drf, safe=':[]@,.$|~')}" for drf in drfs]
+        return f"{self._base_url}?acl={_ACL_CMD_SEP.join(commands)}"
+
+    def execute(self, acl_command: str, timeout: Optional[float] = None) -> str:
+        """Execute a raw ACL command string and return the text output.
+
+        The *acl_command* is placed verbatim after ``?acl=`` in the CGI URL.
+        Spaces should be ``+``, semicolons escaped as ``\\;``.
+
+        Example::
+
+            backend.execute("read+M:OUTTMP")
+            backend.execute(
+                "device_list/create+devs+devices='M:OUTTMP,G:AMANDA'"
+                "\\\\;read_list/no_name/no_units+device_list=devs"
+            )
+        """
+        if self._closed:
+            raise RuntimeError("Backend is closed")
+        effective_timeout = timeout if timeout is not None else self._timeout
+        url = f"{self._base_url}?acl={acl_command}"
+        return self._fetch(url, effective_timeout)
 
     def _fetch(self, url: str, timeout: float) -> str:
-        """
-        Fetch URL content.
-
-        Args:
-            url: URL to fetch
-            timeout: Request timeout in seconds
-
-        Returns:
-            Response text
+        """Fetch URL content.
 
         Raises:
             DeviceError: If HTTP request fails
@@ -213,15 +252,7 @@ class ACLBackend(Backend):
             )
 
     def read(self, drf: str, timeout: Optional[float] = None) -> Value:
-        """
-        Read a single device value via HTTP.
-
-        Args:
-            drf: Device request string
-            timeout: Request timeout in seconds (None=default)
-
-        Returns:
-            The device value
+        """Read a single device value via HTTP.
 
         Raises:
             RuntimeError: If backend is closed
@@ -229,7 +260,6 @@ class ACLBackend(Backend):
         """
         reading = self.get(drf, timeout=timeout)
 
-        # Raise if not ok: handles both negative errors AND positive status without data
         if not reading.ok:
             raise DeviceError(
                 drf=reading.drf,
@@ -242,29 +272,21 @@ class ACLBackend(Backend):
         return reading.value
 
     def get(self, drf: str, timeout: Optional[float] = None) -> Reading:
-        """
-        Read a single device with metadata via HTTP.
-
-        Args:
-            drf: Device request string
-            timeout: Request timeout in seconds (None=default)
-
-        Returns:
-            Reading object
-        """
+        """Read a single device with metadata via HTTP."""
         readings = self.get_many([drf], timeout=timeout)
         return readings[0]
 
     def get_many(self, drfs: list[str], timeout: Optional[float] = None) -> list[Reading]:
-        """
-        Read multiple devices via HTTP.
+        """Read multiple devices via HTTP.
 
-        Args:
-            drfs: List of device request strings
-            timeout: Total timeout for request (None=default)
+        Sends all reads in a single request using semicolon-separated ACL
+        commands.  If the batch fails (e.g. one bad device aborts the whole
+        script), falls back to issuing one HTTP request per device so that
+        valid devices still return data and only the bad ones get errors.
 
-        Returns:
-            List of Reading objects in same order as input
+        .. todo:: When all DRFs share the same property, use ``device_list``
+           + ``read_list`` for a true simultaneous batch read instead of
+           sequential ``read`` commands.
         """
         if self._closed:
             raise RuntimeError("Backend is closed")
@@ -274,14 +296,13 @@ class ACLBackend(Backend):
 
         effective_timeout = timeout if timeout is not None else self._timeout
 
-        # Build URL and fetch
         url = self._build_url(drfs)
-        logger.debug(f"ACL request: {url}")
+        logger.debug(f"ACL batch request: {url}")
 
         try:
             response_text = self._fetch(url, effective_timeout)
         except DeviceError as e:
-            # Return error readings for all devices
+            # HTTP-level error — all devices fail
             return [
                 Reading(
                     drf=drf,
@@ -294,19 +315,46 @@ class ACLBackend(Backend):
                 for drf in drfs
             ]
 
-        logger.debug(f"ACL response: {response_text[:200]}...")
+        logger.debug(f"ACL batch response: {response_text[:200]}")
 
-        # Parse response - ACL returns one value per line for multiple devices
-        lines = response_text.strip().split("\n")
+        lines = response_text.strip().splitlines()
 
+        # ACL aborts the whole script on the first bad device, so if line
+        # count doesn't match or any line is an error, fall back to
+        # individual reads to isolate the failure(s).
+        if len(lines) != len(drfs) or any(_is_error_response(line)[0] for line in lines):
+            logger.debug(
+                "ACL batch error/mismatch (%d lines for %d drfs), falling back to individual reads",
+                len(lines),
+                len(drfs),
+            )
+            return self._get_many_individual(drfs, effective_timeout)
+
+        # Happy path: one line per device, in order
         readings: list[Reading] = []
         now = datetime.now()
+        for drf, line in zip(drfs, lines):
+            value, value_type = _parse_acl_line(line)
+            readings.append(
+                Reading(
+                    drf=drf,
+                    value_type=value_type,
+                    value=value,
+                    error_code=ERR_OK,
+                    timestamp=now,
+                )
+            )
+        return readings
 
-        for i, drf in enumerate(drfs):
-            if i < len(lines):
-                line = lines[i]
-
-                # Check for error
+    def _get_many_individual(self, drfs: list[str], timeout: float) -> list[Reading]:
+        """Fallback: read each device individually to isolate errors."""
+        readings: list[Reading] = []
+        now = datetime.now()
+        for drf in drfs:
+            url = self._build_url([drf])
+            try:
+                response_text = self._fetch(url, timeout)
+                line = response_text.strip().splitlines()[0]
                 is_error, error_msg = _is_error_response(line)
                 if is_error:
                     readings.append(
@@ -320,8 +368,7 @@ class ACLBackend(Backend):
                         )
                     )
                 else:
-                    # Parse value
-                    value, value_type = _parse_acl_value(line)
+                    value, value_type = _parse_acl_line(line)
                     readings.append(
                         Reading(
                             drf=drf,
@@ -331,18 +378,17 @@ class ACLBackend(Backend):
                             timestamp=now,
                         )
                     )
-            else:
-                # No response for this device
+            except DeviceError as e:
                 readings.append(
                     Reading(
                         drf=drf,
                         value_type=ValueType.SCALAR,
-                        error_code=ERR_RETRY,
-                        message="No response from ACL",
+                        facility_code=e.facility_code,
+                        error_code=e.error_code,
+                        message=e.message,
                         timestamp=now,
                     )
                 )
-
         return readings
 
     def close(self) -> None:

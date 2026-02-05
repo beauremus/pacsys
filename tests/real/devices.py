@@ -50,7 +50,7 @@ def acl_server_available() -> bool:
         import urllib.request
 
         req = urllib.request.Request(
-            "https://www-ad.fnal.gov/cgi-bin/acl.pl?acl=read/M:OUTTMP",
+            "https://www-bd.fnal.gov/cgi-bin/acl.pl?acl=read+M:OUTTMP",
             method="HEAD",
         )
         with urllib.request.urlopen(req, timeout=3.0):
