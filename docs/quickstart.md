@@ -9,13 +9,13 @@
 ## Installation
 
 ```bash
-pip install acsys
+pip install pacsys
 ```
 
 ### Development Install
 
 ```bash
-git clone https://github.com/fermi-ad/pacsys.git
+git clone https://github.com/fast-iota/pacsys.git
 cd pacsys
 pip install -e ".[dev]"
 ```

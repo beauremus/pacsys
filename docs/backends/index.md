@@ -15,6 +15,7 @@ flowchart TB
         ACL[ACL CGI]
         DMQ[DataBroker<br>Bunny OAC/DAE]
         DB["DB (PostgreSQL)"]
+        CLX[CLX nodes]
     end
 
     FE[Frontends]
@@ -24,6 +25,8 @@ flowchart TB
     P -->|DPM/gRPC<br>gRPC:50051<br>Protobuf| DPM
     P -->|HTTPS:443<br>CGI script| ACL
     P -->|DMQ<br>TCP:5672<br>AMQP| DMQ
+    P -->|DevDB<br>gRPC:50051<br>Protobuf| DB
+    P -->|ACL-over-SSH<br>SSH:22| CLX
 
     CS --> FE
     CS --> OT
