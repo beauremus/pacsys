@@ -428,7 +428,7 @@ class _DMQSubscriptionHandle(SubscriptionHandle):
         self._drfs = drfs
         self._is_callback_mode = is_callback_mode
         self._on_error = on_error
-        self._queue: queue.Queue[Reading] = queue.Queue(maxsize=_DEFAULT_QUEUE_MAXSIZE)
+        self._queue: queue.Queue[Reading | None] = queue.Queue(maxsize=_DEFAULT_QUEUE_MAXSIZE)
         self._stopped = False
         self._exc: Optional[Exception] = None
         self._ref_ids: list[int] = list(range(1, len(drfs) + 1))
@@ -458,26 +458,38 @@ class _DMQSubscriptionHandle(SubscriptionHandle):
             if self._exc is not None:
                 raise self._exc
 
+            # Compute how long to block on the queue
+            if timeout == 0:
+                wait = 0.0
+            elif timeout is not None:
+                wait = max(0.0, timeout - (time.monotonic() - start_time))
+                if wait == 0.0:
+                    break
+            else:
+                wait = None  # block indefinitely
+
             try:
-                reading = self._queue.get(timeout=0.1)
-                yield (reading, self)
+                reading = self._queue.get(timeout=wait)
             except queue.Empty:
-                if self._exc is not None:
-                    raise self._exc
-                if self._stopped:
-                    break
-                if timeout == 0:
-                    break
-                elif timeout is not None:
-                    elapsed = time.monotonic() - start_time
-                    if elapsed >= timeout:
-                        break
-                continue
+                break  # timeout == 0 or user timeout expired
+
+            if reading is None:
+                break  # sentinel — stop requested
+
+            yield (reading, self)
+
+    def _wake_queue(self) -> None:
+        """Push sentinel to unblock a reader waiting in readings()."""
+        try:
+            self._queue.put_nowait(None)
+        except queue.Full:
+            pass
 
     def stop(self) -> None:
         if not self._stopped:
             self._backend.remove(self)
             self._stopped = True
+            self._wake_queue()
 
 
 @dataclass
@@ -1719,6 +1731,7 @@ class DMQBackend(Backend):
             for sub in self._subscriptions.values():
                 sub.handle._exc = reason
                 sub.handle._stopped = True
+                sub.handle._wake_queue()
                 if sub.handle._on_error is not None:
                     try:
                         sub.handle._on_error(reason, sub.handle)
@@ -1814,6 +1827,7 @@ class DMQBackend(Backend):
         """Channel closed callback (runs in IO thread)."""
         logger.debug(f"Channel closed for sub {sub.sub_id[:8]}: {reason}")
         sub.handle._stopped = True
+        sub.handle._wake_queue()
         if sub.handle._on_error is not None and sub.handle._exc is None:
             sub.handle._exc = reason
             try:
@@ -1888,6 +1902,7 @@ class DMQBackend(Backend):
                     pass
 
             sub.handle._stopped = True
+            sub.handle._wake_queue()
 
         self._select_connection.ioloop.add_callback_threadsafe(do_cancel)
 
@@ -1995,6 +2010,7 @@ class DMQBackend(Backend):
 
         self._cancel_subscription_async(sub)
         handle._stopped = True
+        handle._wake_queue()
         logger.info(f"Removed subscription sub_id={sub_id[:8]}")
 
     def stop_streaming(self) -> None:
@@ -2010,6 +2026,7 @@ class DMQBackend(Backend):
 
         for sub in subs:
             sub.handle._stopped = True
+            sub.handle._wake_queue()
             self._cancel_subscription_async(sub)
 
         # Close the SelectConnection and stop the IO thread

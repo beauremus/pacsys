@@ -230,7 +230,12 @@ class Tunnel:
 
 
 def _bidirectional_forward(sock: socket.socket, chan: paramiko.Channel, stop_event: threading.Event):
-    """Bidirectional data forwarding between a socket and an SSH channel."""
+    """Bidirectional data forwarding between a socket and an SSH channel.
+
+    Uses select.select for cross-platform I/O multiplexing. This works on
+    Windows because paramiko.Channel.fileno() returns a socket-backed fd
+    via paramiko.pipe.WindowsPipe (loopback socket pair), not an os.pipe() fd.
+    """
     while not stop_event.is_set():
         r, _, _ = select.select([sock, chan], [], [], 1.0)
         if sock in r:

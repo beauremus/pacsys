@@ -21,6 +21,7 @@ from pacsys.drf_utils import get_device_name
 
 # Import server availability checks and markers from shared module
 from .devices import (
+    ACL_TEST_URL,
     ALLOWED_WRITE_DEVICES,
     acnet_tcp_server_available,
     dpm_server_available,
@@ -44,6 +45,7 @@ __all__ = [
     "acnet_tcp_server_available",
     "dpm_server_available",
     "grpc_server_available",
+    "ACL_TEST_URL",
     "acl_server_available",
     "dmq_server_available",
     "requires_acnet_tcp",
@@ -142,10 +144,10 @@ def grpc_backend():
 
 @pytest.fixture
 def acl_backend():
-    """Create an ACLBackend for testing."""
+    """Create an ACLBackend for testing (uses local proxy)."""
     from pacsys.backends.acl import ACLBackend
 
-    backend = ACLBackend()
+    backend = ACLBackend(base_url=ACL_TEST_URL, verify_ssl=False)
     yield backend
     backend.close()
 
@@ -162,7 +164,7 @@ def dmq_backend():
     backend.close()
 
 
-@pytest.fixture(params=["dmq", "dpm_http", "grpc"])
+@pytest.fixture(params=["dmq", "dpm_http", "grpc", "acl"])
 def read_backend(request):
     """Parametrized fixture that yields each read-capable backend.
 
@@ -190,6 +192,12 @@ def read_backend(request):
         from pacsys.backends.grpc_backend import GRPCBackend
 
         backend = GRPCBackend()
+    elif backend_type == "acl":
+        if not acl_server_available():
+            pytest.skip("ACL server not available at localhost:10443")
+        from pacsys.backends.acl import ACLBackend
+
+        backend = ACLBackend(base_url=ACL_TEST_URL, verify_ssl=False)
     else:
         raise ValueError(f"Unknown backend type: {backend_type}")
 

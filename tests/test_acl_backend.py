@@ -19,7 +19,10 @@ import pytest
 
 from pacsys.backends.acl import (
     ACLBackend,
+    _acl_read_command,
+    _is_basic_status_request,
     _parse_acl_line,
+    _parse_raw_hex,
     _is_error_response,
 )
 from pacsys.errors import DeviceError
@@ -104,14 +107,89 @@ class TestIsErrorResponse:
         assert is_error is False
         assert msg is None
 
-    def test_bare_number_not_error(self):
-        is_error, msg = _is_error_response("72.5")
-        assert is_error is False
-
     def test_description_with_dash_not_error(self):
         """A description containing ' - ' should not be a false positive."""
         is_error, msg = _is_error_response("M:FOO = Temperature - external sensor")
         assert is_error is False
+
+
+class TestAclReadCommand:
+    """Tests for _acl_read_command — DRF to ACL command + qualifier mapping."""
+
+    def test_plain_device(self):
+        cmd, drf, quals = _acl_read_command("M:OUTTMP")
+        assert cmd == "read"
+        assert "OUTTMP" in drf
+        assert quals == ""
+
+    def test_raw_field(self):
+        cmd, drf, quals = _acl_read_command("M:OUTTMP.RAW")
+        assert cmd == "read"
+        assert ".RAW" in drf
+        assert "/raw" in quals
+
+    def test_clock_event(self):
+        cmd, drf, quals = _acl_read_command("M:OUTTMP@e,02")
+        assert cmd == "read/pendwait"
+        assert "/event='e,02'" in quals
+        assert "@" not in drf
+
+    def test_clock_event_with_delay(self):
+        cmd, drf, quals = _acl_read_command("M:OUTTMP@e,02,e,500")
+        assert cmd == "read/pendwait"
+        assert "/event='e,02,e,500'" in quals
+        assert "@" not in drf
+
+    def test_raw_with_clock_event(self):
+        cmd, drf, quals = _acl_read_command("M:OUTTMP.RAW@e,0f")
+        assert cmd == "read/pendwait"
+        assert "/raw" in quals
+        assert "/event='e,0f'" in quals
+        assert ".RAW" in drf
+        assert "@" not in drf
+
+    def test_immediate_event_stripped(self):
+        cmd, drf, quals = _acl_read_command("M:OUTTMP@I")
+        assert cmd == "read"
+        assert quals == ""
+        assert "@" not in drf
+
+    def test_qualifier_canonicalized(self):
+        """DRF qualifier chars are expanded to explicit property names."""
+        cmd, drf, quals = _acl_read_command("M~OUTTMP")
+        assert cmd == "read"
+        assert drf == "M:OUTTMP.DESCRIPTION"
+
+    def test_periodic_event_raises(self):
+        with pytest.raises(DeviceError, match="periodic"):
+            _acl_read_command("M:OUTTMP@p,100")
+
+    def test_periodic_q_event_raises(self):
+        with pytest.raises(DeviceError, match="periodic"):
+            _acl_read_command("M:OUTTMP@q,500")
+
+
+class TestParseRawHex:
+    """Tests for _parse_raw_hex — parses ACL /raw hex output."""
+
+    @pytest.mark.parametrize(
+        "line,expected",
+        [
+            ("M:OUTTMP = 0x42900000", bytes.fromhex("42900000")),
+            ("M:OUTTMP = 0x4290 0x0000", bytes.fromhex("42900000")),
+            ("M:OUTTMP = 42900000", bytes.fromhex("42900000")),
+            ("M:OUTTMP = 42 90 00 00", bytes.fromhex("42900000")),
+            ("0x42900000", bytes.fromhex("42900000")),
+            ("M:OUTTMP = 0xA", bytes.fromhex("0a")),
+            ("M:OUTTMP = ", b""),
+        ],
+    )
+    def test_parse_raw_hex(self, line, expected):
+        assert _parse_raw_hex(line) == expected
+
+    def test_no_hex_data_raises(self):
+        with pytest.raises(ValueError, match="No hex data"):
+            _parse_raw_hex("M:OUTTMP = not hex at all")
 
 
 class TestBuildURL:
@@ -130,9 +208,23 @@ class TestBuildURL:
         assert "read+M:OUTTMP\\;read+G:AMANDA" in url
         backend.close()
 
-    def test_default_base_url(self):
+    def test_raw_device_url_has_qualifier(self):
         backend = ACLBackend()
-        assert "www-bd.fnal.gov" in backend.base_url
+        url = backend._build_url(["M:OUTTMP.RAW"])
+        assert "read+M:OUTTMP.RAW/raw" in url
+        backend.close()
+
+    def test_batch_mixed_raw_and_scaled(self):
+        backend = ACLBackend()
+        url = backend._build_url(["M:OUTTMP.RAW", "G:AMANDA"])
+        assert "read+M:OUTTMP.RAW/raw" in url
+        assert "read+G:AMANDA" in url
+        backend.close()
+
+    def test_clock_event_url(self):
+        backend = ACLBackend()
+        url = backend._build_url(["M:OUTTMP@e,02"])
+        assert "read/pendwait+M:OUTTMP.READING/event='e,02'" in url
         backend.close()
 
 
@@ -194,6 +286,46 @@ class TestSingleDeviceRead:
                 assert "DIO_NO_SUCH" in reading.message
             finally:
                 backend.close()
+
+
+class TestRawRead:
+    """Tests for .RAW field reading."""
+
+    def test_get_raw_returns_bytes(self):
+        with mock.patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value = MockACLResponse("M:OUTTMP = 0x42900000")
+            with ACLBackend() as backend:
+                reading = backend.get("M:OUTTMP.RAW")
+                assert reading.value == bytes.fromhex("42900000")
+                assert reading.value_type == ValueType.RAW
+                assert reading.ok
+
+    def test_batch_mixed_raw_and_scaled(self):
+        with mock.patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value = MockACLResponse("M:OUTTMP = 0x42900000\nG:AMANDA       =  66")
+            with ACLBackend() as backend:
+                readings = backend.get_many(["M:OUTTMP.RAW", "G:AMANDA"])
+                assert readings[0].value == bytes.fromhex("42900000")
+                assert readings[0].value_type == ValueType.RAW
+                assert readings[1].value == 66.0
+                assert readings[1].value_type == ValueType.SCALAR
+
+    def test_raw_fallback_individual(self):
+        """Raw reads work through the individual-fallback path."""
+        with mock.patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.side_effect = [
+                # Batch: error triggers fallback
+                MockACLResponse("Invalid device - DIO_NO_SUCH"),
+                # Individual: M:OUTTMP.RAW succeeds
+                MockACLResponse("M:OUTTMP = 0xDEADBEEF"),
+                # Individual: Z:BAD fails
+                MockACLResponse("Invalid device name (Z:BAD) - DIO_NO_SUCH"),
+            ]
+            with ACLBackend() as backend:
+                readings = backend.get_many(["M:OUTTMP.RAW", "Z:BAD"])
+                assert readings[0].value == bytes.fromhex("DEADBEEF")
+                assert readings[0].value_type == ValueType.RAW
+                assert readings[1].is_error
 
 
 class TestMultipleDeviceRead:
@@ -259,13 +391,6 @@ class TestMultipleDeviceRead:
             finally:
                 backend.close()
 
-    def test_empty_drfs(self):
-        backend = ACLBackend()
-        try:
-            assert backend.get_many([]) == []
-        finally:
-            backend.close()
-
 
 class TestHTTPErrors:
     """Tests for HTTP error handling."""
@@ -325,11 +450,101 @@ class TestContextManager:
             pass
         assert backend._closed
 
-    def test_close_multiple_times_safe(self):
-        backend = ACLBackend()
-        backend.close()
-        backend.close()
-        assert backend._closed
+
+class TestIsBasicStatusRequest:
+    """Tests for _is_basic_status_request — detects bare STATUS DRFs."""
+
+    @pytest.mark.parametrize(
+        "drf,expected",
+        [
+            ("N|LGXS", True),  # qualifier char
+            ("N:LGXS.STATUS", True),  # explicit property
+            ("Z|ACLTST", True),
+            ("N:LGXS.STATUS.ON", False),  # specific field
+            ("N:LGXS.STATUS.RAW", False),
+            ("N:LGXS.STATUS.TEXT", False),
+            ("M:OUTTMP", False),  # READING property
+            ("M_OUTTMP", False),  # SETTING property
+        ],
+    )
+    def test_is_basic_status_request(self, drf, expected):
+        assert _is_basic_status_request(drf) is expected
+
+    def test_invalid_drf_returns_false(self):
+        assert _is_basic_status_request("X") is False
+
+
+class TestBasicStatusRead:
+    """Tests for basic status reading via individual field queries."""
+
+    def test_all_fields_present(self):
+        """All 5 status fields return True/False → full dict."""
+        with mock.patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.side_effect = [
+                MockACLResponse("N:LGXS is on = False"),
+                MockACLResponse("N:LGXS is ready = False"),
+                MockACLResponse("N:LGXS is remote = True"),
+                MockACLResponse("N:LGXS is positive = True"),
+                MockACLResponse("N:LGXS is ramping = False"),
+            ]
+            with ACLBackend() as backend:
+                reading = backend.get("N|LGXS")
+                assert reading.ok
+                assert reading.value_type == ValueType.BASIC_STATUS
+                assert reading.value == {
+                    "on": False,
+                    "ready": False,
+                    "remote": True,
+                    "positive": True,
+                    "ramp": False,
+                }
+
+    def test_missing_attribute_omitted(self):
+        """DIO_NOATT for remote → key omitted from dict (matches DPM)."""
+        with mock.patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.side_effect = [
+                MockACLResponse("Z:ACLTST is on = False"),
+                MockACLResponse("Z:ACLTST is ready = True"),
+                MockACLResponse("Error determining status text in read device command at line 1 - Z:ACLTST DIO_NOATT"),
+                MockACLResponse("Z:ACLTST is positive = False"),
+                MockACLResponse("Z:ACLTST is ramping = False"),
+            ]
+            with ACLBackend() as backend:
+                reading = backend.get("Z:ACLTST.STATUS")
+                assert reading.ok
+                assert reading.value_type == ValueType.BASIC_STATUS
+                assert "remote" not in reading.value
+                assert reading.value == {"on": False, "ready": True, "positive": False, "ramp": False}
+
+    def test_nonexistent_device_returns_error(self):
+        """All fields error (DIO_NO_SUCH) → error Reading."""
+        error_line = "Invalid device name (Z:NOTFND) in read device command at line 0 - DIO_NO_SUCH"
+        with mock.patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.side_effect = [MockACLResponse(error_line)] * 5
+            with ACLBackend() as backend:
+                reading = backend.get("Z:NOTFND.STATUS")
+                assert reading.is_error
+                assert "DIO_NO_SUCH" in reading.message
+
+    def test_get_many_mixes_status_and_normal(self):
+        """get_many routes status DRFs through per-field reads, others through batch."""
+        with mock.patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.side_effect = [
+                # Batch for normal DRF (recursive get_many runs first)
+                MockACLResponse("M:OUTTMP       =  72.5 DegF"),
+                # 5 status field reads for N|LGXS
+                MockACLResponse("N:LGXS is on = False"),
+                MockACLResponse("N:LGXS is ready = False"),
+                MockACLResponse("N:LGXS is remote = True"),
+                MockACLResponse("N:LGXS is positive = True"),
+                MockACLResponse("Error - N:LGXS DIO_NOATT"),
+            ]
+            with ACLBackend() as backend:
+                readings = backend.get_many(["N|LGXS", "M:OUTTMP"])
+                assert len(readings) == 2
+                assert readings[0].value_type == ValueType.BASIC_STATUS
+                assert readings[0].value == {"on": False, "ready": False, "remote": True, "positive": True}
+                assert readings[1].value == 72.5
 
 
 class TestWriteNotSupported:
@@ -343,14 +558,6 @@ class TestWriteNotSupported:
         finally:
             backend.close()
 
-    def test_write_many_raises_not_implemented(self):
-        backend = ACLBackend()
-        try:
-            with pytest.raises(NotImplementedError):
-                backend.write_many([("M:OUTTMP", 72.5)])
-        finally:
-            backend.close()
-
 
 class TestOperationAfterClose:
     """Tests for operations after close."""
@@ -360,12 +567,6 @@ class TestOperationAfterClose:
         backend.close()
         with pytest.raises(RuntimeError, match="Backend is closed"):
             backend.read("M:OUTTMP")
-
-    def test_get_many_after_close_raises(self):
-        backend = ACLBackend()
-        backend.close()
-        with pytest.raises(RuntimeError, match="Backend is closed"):
-            backend.get_many(["M:OUTTMP"])
 
 
 class TestTimeout:

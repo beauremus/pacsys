@@ -44,16 +44,23 @@ def grpc_server_available() -> bool:
         return False
 
 
+ACL_TEST_URL = "https://localhost:10443/cgi-bin/acl.pl"
+
+
 def acl_server_available() -> bool:
-    """Check if ACL CGI endpoint is reachable."""
+    """Check if ACL CGI endpoint is reachable (test proxy at localhost:10443)."""
     try:
+        import ssl
         import urllib.request
 
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
         req = urllib.request.Request(
-            "https://www-bd.fnal.gov/cgi-bin/acl.pl?acl=read+M:OUTTMP",
+            f"{ACL_TEST_URL}?acl=read+M:OUTTMP",
             method="HEAD",
         )
-        with urllib.request.urlopen(req, timeout=3.0):
+        with urllib.request.urlopen(req, timeout=3.0, context=ctx):
             return True
     except Exception:
         return False

@@ -14,7 +14,9 @@ Usage:
 """
 
 import logging
+import os
 import re
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -23,6 +25,10 @@ from typing import Optional
 
 from pacsys.acnet.errors import ERR_OK, ERR_RETRY, ERR_TIMEOUT
 from pacsys.backends import Backend
+from pacsys.drf3 import parse_request
+from pacsys.drf3.event import DefaultEvent
+from pacsys.drf3.field import DRF_FIELD
+from pacsys.drf3.property import DRF_PROPERTY
 from pacsys.errors import DeviceError
 from pacsys.types import (
     BackendCapability,
@@ -44,6 +50,153 @@ _ACL_CMD_SEP = "\\;"
 
 # ACL error codes: DIO_NO_SUCH, CLIB_SYNTAX, DIO_NOSCALE, etc.
 _ACL_ERROR_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$")
+
+# Properties whose qualifier char (:) ACL understands natively.
+# All other properties (_, |, &, @, $, ~, ^, #, !) must be canonicalized
+# to explicit property names (e.g. M_OUTTMP → M:OUTTMP.SETTING).
+_ACL_NATIVE_PROPERTIES = frozenset({DRF_PROPERTY.READING})
+
+# ── Basic status via per-field reads ──────────────────────────────────
+#
+# ACNET basic status and digital status share the same raw status integer
+# but interpret it through different lenses:
+#
+#   Basic status  – 5 semantic attributes (on/ready/remote/positive/ramp),
+#                   each with a per-device bit mask stored in the ACNET
+#                   database (accdb.basic_status_scaling).  The masks are
+#                   NOT fixed across devices (e.g. "ramp" is often 0x200
+#                   but this is device-dependent).
+#
+#   Digital status – per-bit descriptions from a separate DB table
+#                    (accdb.digital_status), giving device-specific names
+#                    like "Shutter Status" or "Beam Switch".
+#
+# Because the masks are device-specific, we cannot parse .STATUS.RAW
+# ourselves.  Instead we ask ACL for each boolean field individually
+# (e.g. "read N:LGXS.STATUS.ON") and let the server apply the correct
+# DB scaling.  Fields the device lacks (DIO_NOATT) are omitted from the
+# resulting dict, matching DPM's behavior.
+#
+_BASIC_STATUS_FIELDS = ("ON", "READY", "REMOTE", "POSITIVE", "RAMP")
+_BASIC_STATUS_KEYS = ("on", "ready", "remote", "positive", "ramp")
+
+
+def _is_basic_status_request(drf: str) -> bool:
+    """Check if DRF requests basic status (STATUS property, default field)."""
+    try:
+        req = parse_request(drf)
+        return req.property == DRF_PROPERTY.STATUS and req.field in (None, DRF_FIELD.ALL)
+    except (ValueError, TypeError):
+        return False
+
+
+def _is_raw_field(drf: str) -> bool:
+    """Check if a DRF string requests the RAW field."""
+    try:
+        return parse_request(drf).field == DRF_FIELD.RAW
+    except (ValueError, TypeError):
+        return False
+
+
+def _acl_read_command(drf: str) -> tuple[str, str, str]:
+    """Build ACL read command, cleaned DRF, and device-level qualifiers.
+
+    ACL syntax is ``read+DEVICE/qualifier1/qualifier2`` — all qualifiers
+    go **after** the device name.  Placing ``/ftd=`` or ``/event=`` before
+    the device produces ``CLIB_SYNTAX``.
+
+    Maps DRF components to ACL qualifiers:
+
+    - ``.RAW`` field → ``/raw`` device qualifier (hex output)
+    - ``@e,XX`` event → ``/ftd=evtXX`` device qualifier + ``/pendwait`` command qualifier
+    - ``@I`` / default → stripped (ACL always reads immediately)
+    - ``@p,NNN`` → raises DeviceError (streaming not supported)
+
+    Note: ``/pendwait`` is a **command** qualifier (before device), while
+    ``/raw`` and ``/ftd=`` are **device** qualifiers (after device).
+    Without ``/pendwait``, clock event reads return cached data instead of
+    waiting for the event to fire.
+
+    Returns:
+        ``(command, cleaned_drf, qualifiers)``
+        e.g. ``("read/pendwait", "M:OUTTMP.RAW", "/raw/ftd=evt02")``
+    """
+    req = parse_request(drf)
+    command = "read"
+    qualifiers = ""
+
+    if req.field == DRF_FIELD.RAW:
+        qualifiers += "/raw"
+
+    event = req.event
+    if event is not None and event.mode in ("P", "Q"):
+        raise DeviceError(
+            drf=drf,
+            facility_code=0,
+            error_code=ERR_RETRY,
+            message=(
+                f"ACL does not support periodic/streaming events ({drf}). Use a streaming backend (DPM, gRPC, DMQ)."
+            ),
+        )
+
+    if event is not None and event.mode == "E":
+        command = "read/pendwait"
+        qualifiers += f"/event='{event.raw_string}'"
+
+    # Canonicalize only when needed: expand qualifier chars (~, |, @, $)
+    # that ACL doesn't understand, or strip non-default events.
+    has_event_to_strip = event is not None and event.mode not in ("U",)
+    has_exotic_qualifier = req.property not in _ACL_NATIVE_PROPERTIES
+    if has_event_to_strip or has_exotic_qualifier:
+        clean_drf = req.to_canonical(event=DefaultEvent())
+    else:
+        clean_drf = drf
+
+    return command, clean_drf, qualifiers
+
+
+def _parse_raw_hex(text: str) -> bytes:
+    """Parse ACL ``/raw`` hex output into bytes.
+
+    ACL ``/raw`` qualifier returns raw data in hex, e.g.::
+
+        M:OUTTMP = 0x42900000
+        M:OUTTMP = 0x4290 0x0000
+        M:OUTTMP = 42 90 00 00
+    """
+    text = text.strip()
+    if "=" in text:
+        _, _, text = text.partition("=")
+        text = text.strip()
+
+    if not text:
+        return b""
+
+    # Collect hex digits from tokens, stopping at first non-hex token
+    hex_parts: list[str] = []
+    for token in text.split():
+        clean = token.lower().removeprefix("0x")
+        if clean and all(c in "0123456789abcdef" for c in clean):
+            hex_parts.append(clean)
+        else:
+            break  # units text or other non-hex suffix
+
+    hex_str = "".join(hex_parts)
+    if not hex_str:
+        raise ValueError(f"No hex data found in ACL /raw output: {text!r}")
+
+    # Pad to even length for bytes.fromhex
+    if len(hex_str) % 2:
+        hex_str = "0" + hex_str
+
+    return bytes.fromhex(hex_str)
+
+
+def _parse_response_line(drf: str, line: str) -> tuple[Value, ValueType]:
+    """Parse a single ACL response line, choosing raw or text parsing."""
+    if _is_raw_field(drf):
+        return _parse_raw_hex(line), ValueType.RAW
+    return _parse_acl_line(line)
 
 
 def _parse_acl_line(text: str) -> tuple[Value, ValueType]:
@@ -145,18 +298,20 @@ class ACLBackend(Backend):
         self,
         base_url: Optional[str] = None,
         timeout: Optional[float] = None,
+        verify_ssl: bool = True,
     ):
         """
         Initialize ACL backend.
 
         Args:
-            base_url: ACL CGI URL (default: https://www-bd.fnal.gov/cgi-bin/acl.pl)
+            base_url: ACL CGI URL (default: $PACSYS_ACL_URL or https://www-bd.fnal.gov/cgi-bin/acl.pl)
             timeout: HTTP request timeout in seconds (default: 5.0)
+            verify_ssl: Verify SSL certificates (disable for local proxies)
 
         Raises:
             ValueError: If parameters are invalid
         """
-        effective_url = base_url if base_url is not None else DEFAULT_BASE_URL
+        effective_url = base_url if base_url is not None else os.environ.get("PACSYS_ACL_URL", DEFAULT_BASE_URL)
         effective_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT
 
         if not effective_url:
@@ -167,6 +322,11 @@ class ACLBackend(Backend):
         self._base_url = effective_url
         self._timeout = effective_timeout
         self._closed = False
+        self._ssl_context: ssl.SSLContext | None = None
+        if not verify_ssl:
+            self._ssl_context = ssl.create_default_context()
+            self._ssl_context.check_hostname = False
+            self._ssl_context.verify_mode = ssl.CERT_NONE
 
         logger.debug(f"ACLBackend initialized: base_url={effective_url}, timeout={effective_timeout}")
 
@@ -191,13 +351,20 @@ class ACLBackend(Backend):
         ACL ``read`` takes exactly one device; multiple devices are sent as
         separate ``read`` commands joined by ``\\;`` (escaped semicolon).
 
-        Single:   ``?acl=read+DEVICE``
-        Batch:    ``?acl=read+DEV1\\;read+DEV2\\;read+DEV3``
+        Single:   ``?acl=read+DEVICE/qualifier``
+        Batch:    ``?acl=read+DEV1/q1\\;read+DEV2/q2``
+
+        Qualifiers (``/raw``, ``/ftd=evtXX``) must come **after** the device
+        name — ACL rejects them before the device (CLIB_SYNTAX).
         """
         # The ACL CGI only decodes spaces (+/%20) and quotes (%27) from the
         # query string — general %XX sequences like %3A are NOT decoded.
         # DRF characters (colons, brackets, etc.) must be sent raw.
-        commands = [f"read+{urllib.parse.quote(drf, safe=':[]@,.$|~')}" for drf in drfs]
+        commands = []
+        for drf in drfs:
+            cmd, clean_drf, qualifiers = _acl_read_command(drf)
+            quoted = urllib.parse.quote(clean_drf, safe=":[]@,.$|~")
+            commands.append(f"{cmd}+{quoted}{qualifiers}")
         return f"{self._base_url}?acl={_ACL_CMD_SEP.join(commands)}"
 
     def execute(self, acl_command: str, timeout: Optional[float] = None) -> str:
@@ -227,7 +394,7 @@ class ACLBackend(Backend):
             DeviceError: If HTTP request fails
         """
         try:
-            with urllib.request.urlopen(url, timeout=timeout) as response:
+            with urllib.request.urlopen(url, timeout=timeout, context=self._ssl_context) as response:
                 return response.read().decode("utf-8")
         except urllib.error.HTTPError as e:
             raise DeviceError(
@@ -284,6 +451,9 @@ class ACLBackend(Backend):
         script), falls back to issuing one HTTP request per device so that
         valid devices still return data and only the bad ones get errors.
 
+        Basic-status DRFs (e.g. ``N|LGXS``, ``Z:ACLTST.STATUS``) are routed
+        through per-field reads automatically.
+
         .. todo:: When all DRFs share the same property, use ``device_list``
            + ``read_list`` for a true simultaneous batch read instead of
            sequential ``read`` commands.
@@ -295,6 +465,18 @@ class ACLBackend(Backend):
             return []
 
         effective_timeout = timeout if timeout is not None else self._timeout
+
+        # Route basic-status DRFs through per-field reads (5 HTTP requests each).
+        # Remaining DRFs go through the normal batch path (recursive, safe
+        # because the recursive call contains no status DRFs).
+        status_indices = {i for i, d in enumerate(drfs) if _is_basic_status_request(d)}
+        if status_indices:
+            normal_drfs = [d for i, d in enumerate(drfs) if i not in status_indices]
+            normal_iter = iter(self.get_many(normal_drfs, timeout=timeout) if normal_drfs else [])
+            return [
+                self._get_basic_status(drf, effective_timeout) if i in status_indices else next(normal_iter)
+                for i, drf in enumerate(drfs)
+            ]
 
         url = self._build_url(drfs)
         logger.debug(f"ACL batch request: {url}")
@@ -334,16 +516,14 @@ class ACLBackend(Backend):
         readings: list[Reading] = []
         now = datetime.now()
         for drf, line in zip(drfs, lines):
-            value, value_type = _parse_acl_line(line)
-            readings.append(
-                Reading(
-                    drf=drf,
-                    value_type=value_type,
-                    value=value,
-                    error_code=ERR_OK,
-                    timestamp=now,
+            try:
+                value, value_type = _parse_response_line(drf, line)
+            except ValueError as exc:
+                readings.append(
+                    Reading(drf=drf, value_type=ValueType.RAW, error_code=ERR_RETRY, message=str(exc), timestamp=now)
                 )
-            )
+                continue
+            readings.append(Reading(drf=drf, value_type=value_type, value=value, error_code=ERR_OK, timestamp=now))
         return readings
 
     def _get_many_individual(self, drfs: list[str], timeout: float) -> list[Reading]:
@@ -368,15 +548,21 @@ class ACLBackend(Backend):
                         )
                     )
                 else:
-                    value, value_type = _parse_acl_line(line)
-                    readings.append(
-                        Reading(
-                            drf=drf,
-                            value_type=value_type,
-                            value=value,
-                            error_code=ERR_OK,
-                            timestamp=now,
+                    try:
+                        value, value_type = _parse_response_line(drf, line)
+                    except ValueError as exc:
+                        readings.append(
+                            Reading(
+                                drf=drf,
+                                value_type=ValueType.RAW,
+                                error_code=ERR_RETRY,
+                                message=str(exc),
+                                timestamp=now,
+                            )
                         )
+                        continue
+                    readings.append(
+                        Reading(drf=drf, value_type=value_type, value=value, error_code=ERR_OK, timestamp=now)
                     )
             except DeviceError as e:
                 readings.append(
@@ -390,6 +576,42 @@ class ACLBackend(Backend):
                     )
                 )
         return readings
+
+    def _get_basic_status(self, drf: str, timeout: float) -> Reading:
+        """Build a BASIC_STATUS dict by reading individual status fields.
+
+        Issues one HTTP request per field (ON, READY, REMOTE, POSITIVE, RAMP).
+        Fields that don't exist on the device (DIO_NOATT) are omitted from
+        the dict, matching DPM's behavior.  If ALL fields error (e.g.
+        nonexistent device), returns an error Reading.
+        """
+        device = parse_request(drf).device
+        now = datetime.now()
+        status: dict[str, bool] = {}
+        last_error: str | None = None
+
+        for key, field in zip(_BASIC_STATUS_KEYS, _BASIC_STATUS_FIELDS):
+            try:
+                url = self._build_url([f"{device}.STATUS.{field}"])
+                line = self._fetch(url, timeout).strip().splitlines()[0]
+                is_err, msg = _is_error_response(line)
+                if is_err:
+                    last_error = msg
+                elif "= True" in line:
+                    status[key] = True
+                elif "= False" in line:
+                    status[key] = False
+                # DIO_NOATT responses don't match _is_error_response (device
+                # name prefix breaks the regex) and don't match True/False,
+                # so the key is simply omitted — matching DPM behavior.
+            except (DeviceError, IndexError) as e:
+                last_error = str(e)
+
+        if not status and last_error:
+            return Reading(
+                drf=drf, value_type=ValueType.BASIC_STATUS, error_code=ERR_RETRY, message=last_error, timestamp=now
+            )
+        return Reading(drf=drf, value_type=ValueType.BASIC_STATUS, value=status, error_code=ERR_OK, timestamp=now)
 
     def close(self) -> None:
         """Close the backend. No resources to clean up for HTTP client."""

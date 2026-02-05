@@ -14,6 +14,8 @@ import pytest
 import time
 import threading
 
+from pacsys.drf3 import parse_request
+from pacsys.drf3.property import DRF_PROPERTY
 from pacsys.drf_utils import strip_event
 from pacsys.types import Reading, ValueType, BackendCapability, SubscriptionHandle
 from pacsys.errors import DeviceError
@@ -163,9 +165,29 @@ class TestBackendBatchReads:
 class TestBackendValueTypes:
     """Tests for reading all supported value types (all backends)."""
 
+    # ACL CGI doesn't understand qualifier chars (~|@$) but _acl_read_prefix
+    # canonicalizes them to explicit .PROPERTY names. Status/alarm properties
+    # still can't return structured dicts — ACL returns plain text for those.
+    _ACL_UNSUPPORTED_PROPERTIES = {
+        DRF_PROPERTY.ANALOG,
+        DRF_PROPERTY.DIGITAL,
+        DRF_PROPERTY.BIT_STATUS,
+    }
+
+    @staticmethod
+    def _is_acl(backend) -> bool:
+        from pacsys.backends.acl import ACLBackend
+
+        return isinstance(backend, ACLBackend)
+
     @pytest.mark.parametrize("drf,expected_type,python_type,desc", DEVICE_TYPES)
     def test_get_value_type(self, read_backend, drf, expected_type, python_type, desc):
         """get() returns correct value_type for {desc}."""
+        if self._is_acl(read_backend):
+            req = parse_request(drf)
+            if req.property in self._ACL_UNSUPPORTED_PROPERTIES:
+                pytest.skip(f"ACL cannot return structured {req.property.name} data")
+
         reading = read_backend.get(drf, timeout=TIMEOUT_READ)
 
         assert reading.ok, f"Failed to read {drf}: {reading.message}"
@@ -181,6 +203,9 @@ class TestBackendValueTypes:
 
     def test_get_many_all_types(self, read_backend):
         """get_many() reads all value types in one batch."""
+        if self._is_acl(read_backend):
+            pytest.skip("ACL does not support all structured value types")
+
         devices = [d[0] for d in DEVICE_TYPES]
         readings = read_backend.get_many(devices, timeout=TIMEOUT_BATCH)
 
@@ -237,6 +262,13 @@ class TestBackendErrors:
 class TestBackendMixedEvents:
     """Tests for reading devices with different event types in one batch."""
 
+    @staticmethod
+    def _skip_if_acl(backend):
+        from pacsys.backends.acl import ACLBackend
+
+        if isinstance(backend, ACLBackend):
+            pytest.skip("ACL does not support periodic events; use clock events or immediate reads")
+
     def test_get_many_mixed_periodic_and_clock_event(self, read_backend):
         """get_many() returns first reading per device for mixed event types.
 
@@ -248,6 +280,8 @@ class TestBackendMixedEvents:
 
         Timing varies depending on when the clock event fires (0-5s wait).
         """
+        self._skip_if_acl(read_backend)
+
         devices = [f"{SCALAR_DEVICE}@p,100", f"{SCALAR_DEVICE_2}@e,02"]
 
         readings = read_backend.get_many(devices, timeout=10.0)
@@ -259,6 +293,8 @@ class TestBackendMixedEvents:
 
     def test_get_many_all_periodic_same_rate(self, read_backend):
         """get_many() with multiple periodic devices at same rate gets one reading each."""
+        self._skip_if_acl(read_backend)
+
         devices = [f"{SCALAR_DEVICE}@p,100", f"{SCALAR_DEVICE_2}@p,100"]
 
         readings = read_backend.get_many(devices, timeout=TIMEOUT_BATCH)
@@ -268,6 +304,8 @@ class TestBackendMixedEvents:
 
     def test_get_many_immediate_with_periodic(self, read_backend):
         """get_many() with @I (immediate) and @p (periodic) devices."""
+        self._skip_if_acl(read_backend)
+
         devices = [f"{SCALAR_DEVICE}@I", f"{SCALAR_DEVICE_2}@p,500"]
 
         readings = read_backend.get_many(devices, timeout=TIMEOUT_BATCH)

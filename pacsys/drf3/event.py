@@ -60,7 +60,7 @@ class PeriodicEvent(DRF_EVENT):
         imm = True
         freq = 1000
         if match.group(2) is not None:
-            freq = match.group(2)
+            freq = int(match.group(2))
             if match.group(3) is not None:
                 imm = match.group(3)[0].upper() == "T"
         self.cont = match.group(1)[0] == "P"
@@ -81,7 +81,7 @@ class ClockEvent(DRF_EVENT):
         if match.group(2) is not None:
             clock_type = match.group(2)
             if match.group(3) is not None:
-                delay = match.group(3)
+                delay = int(match.group(3))
         self.evt = evt
         self.delay = delay
         self.clock_type = clock_type

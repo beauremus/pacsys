@@ -18,6 +18,7 @@ import logging
 import os
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 
 from pacsys.errors import DeviceError
@@ -301,7 +302,7 @@ class _TTLCache:
         self._ttl = ttl
         self._max_size = max_size
         self._lock = threading.Lock()
-        self._data: dict[str, tuple[float, object]] = {}
+        self._data: OrderedDict[str, tuple[float, object]] = OrderedDict()
 
     def get(self, key: str) -> object | None:
         with self._lock:
@@ -312,10 +313,13 @@ class _TTLCache:
             if time.monotonic() - ts > self._ttl:
                 del self._data[key]
                 return None
+            self._data.move_to_end(key)
             return value
 
     def put(self, key: str, value: object) -> None:
         with self._lock:
+            if key in self._data:
+                self._data.move_to_end(key)
             self._data[key] = (time.monotonic(), value)
             if len(self._data) > self._max_size:
                 self._evict_expired()
@@ -330,9 +334,8 @@ class _TTLCache:
             del self._data[k]
 
     def _evict_oldest(self) -> None:
-        """Remove the oldest entry. Caller must hold lock."""
-        oldest_key = min(self._data, key=lambda k: self._data[k][0])
-        del self._data[oldest_key]
+        """Remove the oldest entry (front of OrderedDict). Caller must hold lock."""
+        self._data.popitem(last=False)
 
     def clear(self, key: str | None = None) -> None:
         with self._lock:
