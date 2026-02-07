@@ -858,8 +858,17 @@ class GRPCBackend(Backend):
             self._start_reactor()
             assert self._loop is not None, "Reactor loop not initialized"
             core = _DaqCore(self._host, self._port, self._auth, self._timeout)
-            fut = asyncio.run_coroutine_threadsafe(core.connect(), self._loop)
-            fut.result(timeout=self._timeout)
+            try:
+                fut = asyncio.run_coroutine_threadsafe(core.connect(), self._loop)
+                fut.result(timeout=self._timeout)
+            except Exception:
+                # Connect failed — tear down reactor so next call retries cleanly
+                self._loop.call_soon_threadsafe(self._loop.stop)
+                if self._reactor_thread is not None:
+                    self._reactor_thread.join(timeout=2.0)
+                self._loop = None
+                self._reactor_thread = None
+                raise
             self._core = core
 
     def _run_sync(self, coro, timeout: Optional[float] = None):
@@ -868,7 +877,11 @@ class GRPCBackend(Backend):
         assert self._loop is not None, "Reactor loop not initialized"
         effective_timeout = timeout if timeout is not None else self._timeout
         fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return fut.result(timeout=effective_timeout + 5.0)
+        try:
+            return fut.result(timeout=effective_timeout + 5.0)
+        except Exception:
+            fut.cancel()
+            raise
 
     # ── Properties ────────────────────────────────────────────────────────
 
@@ -1016,7 +1029,13 @@ class GRPCBackend(Backend):
 
             return asyncio.ensure_future(_run_stream())
 
-        handle._task = asyncio.run_coroutine_threadsafe(_create_task(), self._loop).result(timeout=5.0)
+        fut = asyncio.run_coroutine_threadsafe(_create_task(), self._loop)
+        try:
+            handle._task = fut.result(timeout=5.0)
+        except Exception:
+            fut.cancel()
+            handle._stopped = True
+            raise
 
         with self._handles_lock:
             self._handles.append(handle)

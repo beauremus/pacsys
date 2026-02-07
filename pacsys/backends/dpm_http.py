@@ -86,6 +86,7 @@ DEFAULT_PORT = 6802
 DEFAULT_POOL_SIZE = 4
 DEFAULT_TIMEOUT = 5.0
 _DEFAULT_QUEUE_MAXSIZE = 10000
+_MAX_WRITE_CONNECTIONS = 4  # max concurrent write connections (pooled + in-flight)
 
 # Kerberos service principal for DPM
 
@@ -209,7 +210,10 @@ class _AsyncDPMConnection:
         await self._writer.drain()
 
         # Read OpenList reply (same detection as sync: first 4 bytes)
-        first_bytes = await self._reader.readexactly(4)
+        try:
+            first_bytes = await asyncio.wait_for(self._reader.readexactly(4), timeout=self._timeout)
+        except asyncio.TimeoutError:
+            raise DPMConnectionError("Handshake timed out reading initial reply")
         if first_bytes == b"HTTP":
             # Read rest of HTTP status line for useful error message
             try:
@@ -223,7 +227,10 @@ class _AsyncDPMConnection:
         if length == 0 or length > MAX_MESSAGE_SIZE:
             raise DPMConnectionError(f"Invalid message length: {length}")
 
-        data = await self._reader.readexactly(length)
+        try:
+            data = await asyncio.wait_for(self._reader.readexactly(length), timeout=self._timeout)
+        except asyncio.TimeoutError:
+            raise DPMConnectionError("Handshake timed out reading message body")
         try:
             reply = unmarshal_reply(iter(data))
         except (ProtocolError, StopIteration) as e:
@@ -271,7 +278,10 @@ class _AsyncDPMConnection:
         length = struct.unpack(">I", len_bytes)[0]
         if length == 0 or length > MAX_MESSAGE_SIZE:
             raise DPMConnectionError(f"Invalid message length: {length}")
-        data = await self._reader.readexactly(length)
+        try:
+            data = await asyncio.wait_for(self._reader.readexactly(length), timeout=self._RECV_TIMEOUT)
+        except asyncio.TimeoutError:
+            raise DPMConnectionError(f"Timed out reading {length}-byte message body")
         try:
             return unmarshal_reply(iter(data))
         except (ProtocolError, StopIteration) as e:
@@ -487,6 +497,7 @@ class DPMHTTPBackend(Backend):
         self._write_pool_size = 2  # Max authenticated write connections
         self._write_lock = threading.Lock()
         self._write_idle_timeout = 60.0  # Close connections idle > 60s
+        self._write_in_flight = 0  # Connections currently checked out for writes
 
         # Validate auth eagerly (fail fast)
         if self._auth is not None:
@@ -548,6 +559,8 @@ class DPMHTTPBackend(Backend):
 
         if self._pool is None:
             with self._pool_lock:
+                if self._closed:
+                    raise RuntimeError("Backend is closed")
                 if self._pool is None:
                     self._pool = ConnectionPool(
                         host=self._host,
@@ -602,7 +615,7 @@ class DPMHTTPBackend(Backend):
         pool = self._get_pool()
         conn_broken = False
 
-        with pool.connection() as conn:
+        with pool.connection(wait_timeout=effective_timeout) as conn:
             list_id = conn.list_id
 
             # Pipeline: batch all AddToList + StartList into a single TCP send
@@ -664,7 +677,7 @@ class DPMHTTPBackend(Backend):
                         clear_req.list_id = list_id
                         conn.send_messages_batch([stop_req, clear_req])
                     except Exception:
-                        pass  # Best-effort cleanup on broken connection
+                        conn.close()  # Force-close; pool.release() detects dead conn
 
         readings: list[Reading] = []
 
@@ -855,13 +868,24 @@ class DPMHTTPBackend(Backend):
                     wc.close()
                     continue
                 wc.last_used = time.monotonic()
+                self._write_in_flight += 1
                 logger.debug(f"Reusing authenticated write connection (list_id={wc.conn.list_id})")
                 return wc
+
+            # Pool exhausted — check concurrent limit before creating new
+            if self._write_in_flight >= _MAX_WRITE_CONNECTIONS:
+                raise RuntimeError(f"Too many concurrent write connections ({_MAX_WRITE_CONNECTIONS})")
+            self._write_in_flight += 1
 
         # Create new connection outside the lock
         assert self._auth is not None, "Auth required for write connections"
         conn = DPMConnection(host=self._host, port=self._port, timeout=self._timeout)
-        conn.connect()
+        try:
+            conn.connect()
+        except Exception:
+            with self._write_lock:
+                self._write_in_flight -= 1
+            raise
         wc = _WriteConnection(conn, self._auth.principal, self._role)  # type: ignore[arg-type]  # narrowed by assert above
 
         # Authenticate the new connection
@@ -871,6 +895,8 @@ class DPMHTTPBackend(Backend):
             wc.authenticated = True
             logger.debug(f"Created new authenticated write connection (list_id={conn.list_id})")
         except Exception:
+            with self._write_lock:
+                self._write_in_flight -= 1
             wc.close()
             raise
 
@@ -884,6 +910,10 @@ class DPMHTTPBackend(Backend):
         wc.last_used = time.monotonic()
 
         with self._write_lock:
+            self._write_in_flight -= 1
+            if self._closed:
+                wc.close()
+                return
             if len(self._write_connections) < self._write_pool_size:
                 self._write_connections.append(wc)
                 logger.debug(f"Returned write connection to pool (list_id={wc.conn.list_id})")
@@ -894,6 +924,8 @@ class DPMHTTPBackend(Backend):
 
     def _discard_write_connection(self, wc: _WriteConnection) -> None:
         """Discard a broken write connection without returning to pool."""
+        with self._write_lock:
+            self._write_in_flight -= 1
         wc.close()
         logger.debug(f"Discarded broken write connection (list_id={wc.conn.list_id})")
 
@@ -1035,12 +1067,13 @@ class DPMHTTPBackend(Backend):
         list_id: int,
         prepared_settings: list[tuple[str, Value]],
         deadline: float,
-    ) -> Optional[ApplySettings_reply]:
+    ) -> tuple[Optional[ApplySettings_reply], dict[int, int]]:
         """Execute the write protocol on an authenticated connection.
 
-        Returns the ApplySettings_reply or None on timeout.
+        Returns (ApplySettings_reply, add_errors) or (None, add_errors) on timeout.
         Raises connection errors for retry handling by caller.
         """
+        add_errors: dict[int, int] = {}
         # Stop and clear previous requests from reused connection
         stop_req = StopList_request()
         stop_req.list_id = list_id
@@ -1087,14 +1120,19 @@ class DPMHTTPBackend(Backend):
                     break
                 continue
 
-            if isinstance(reply, (AddToList_reply, ListStatus_reply)):
+            if isinstance(reply, ListStatus_reply):
                 pass
+            elif isinstance(reply, AddToList_reply):
+                if reply.status != 0 and reply.ref_id > 0:
+                    add_errors[reply.ref_id] = reply.status
+                    received_infos += 1
             elif isinstance(reply, DeviceInfo_reply):
                 device_infos[reply.ref_id] = reply
                 received_infos += 1
             elif isinstance(reply, StartList_reply):
                 if reply.status != 0:
                     logger.warning(f"StartList returned status {reply.status}")
+                    return None, add_errors
             elif isinstance(reply, Status_reply):
                 device_infos[reply.ref_id] = reply
                 received_infos += 1
@@ -1141,11 +1179,11 @@ class DPMHTTPBackend(Backend):
                 continue
 
             if isinstance(reply, ApplySettings_reply):
-                return reply
+                return reply, add_errors
             elif isinstance(reply, ListStatus_reply):
                 pass
 
-        return None
+        return None, add_errors
 
     def write_many(
         self,
@@ -1160,6 +1198,9 @@ class DPMHTTPBackend(Backend):
         if not settings:
             return []
 
+        if self._closed:
+            raise RuntimeError("Backend is closed")
+
         if not isinstance(self._auth, KerberosAuth):
             raise AuthenticationError("Backend not configured for authenticated operations. Pass auth=KerberosAuth().")
 
@@ -1172,6 +1213,7 @@ class DPMHTTPBackend(Backend):
         prepared_settings = [(prepare_for_write(drf), value) for drf, value in settings]
 
         # Try up to twice: first attempt may hit a stale pooled connection
+        add_errors: dict[int, int] = {}
         last_error = None
         for attempt in range(2):
             deadline = time.monotonic() + effective_timeout
@@ -1191,8 +1233,7 @@ class DPMHTTPBackend(Backend):
 
             try:
                 assert list_id is not None, "list_id must be set after connect"
-                result = self._execute_write(conn, list_id, prepared_settings, deadline)
-                apply_reply = result
+                apply_reply, add_errors = self._execute_write(conn, list_id, prepared_settings, deadline)
 
                 # Stop list (but keep connection and auth for reuse)
                 stop_req = StopList_request()
@@ -1227,10 +1268,27 @@ class DPMHTTPBackend(Backend):
 
         # Parse results
         if apply_reply is None:
-            return [
-                WriteResult(drf=drf, facility_code=FACILITY_ACNET, error_code=ERR_TIMEOUT, message="Request timeout")
-                for drf, _ in settings
-            ]
+            results: list[WriteResult] = []
+            for i, (drf, _) in enumerate(settings):
+                ref_id = i + 1
+                if ref_id in add_errors:
+                    facility, error = parse_error(add_errors[ref_id])
+                    results.append(
+                        WriteResult(
+                            drf=drf,
+                            facility_code=facility,
+                            error_code=error,
+                            message=status_message(facility, error)
+                            or f"AddToList failed (status={add_errors[ref_id]})",
+                        )
+                    )
+                else:
+                    results.append(
+                        WriteResult(
+                            drf=drf, facility_code=FACILITY_ACNET, error_code=ERR_TIMEOUT, message="Request timeout"
+                        )
+                    )
+            return results
 
         status_map: dict[int, int] = {}
         for status_struct in apply_reply.status:
@@ -1239,6 +1297,19 @@ class DPMHTTPBackend(Backend):
         results: list[WriteResult] = []
         for i, (drf, _) in enumerate(settings):
             ref_id = i + 1
+
+            if ref_id in add_errors:
+                facility, error = parse_error(add_errors[ref_id])
+                results.append(
+                    WriteResult(
+                        drf=drf,
+                        facility_code=facility,
+                        error_code=error,
+                        message=status_message(facility, error) or f"AddToList failed (status={add_errors[ref_id]})",
+                    )
+                )
+                continue
+
             status = status_map.get(ref_id, -1)
 
             if status == 0:
@@ -1519,10 +1590,20 @@ class DPMHTTPBackend(Backend):
         async def _create_task():
             return asyncio.ensure_future(self._stream_subscription(handle))
 
-        handle._task = asyncio.run_coroutine_threadsafe(_create_task(), self._loop).result(timeout=5.0)
-
         with self._handles_lock:
             self._handles.append(handle)
+        future = None
+        try:
+            future = asyncio.run_coroutine_threadsafe(_create_task(), self._loop)
+            handle._task = future.result(timeout=5.0)
+        except Exception:
+            handle._stopped = True
+            if future is not None:
+                future.cancel()
+            with self._handles_lock:
+                if handle in self._handles:
+                    self._handles.remove(handle)
+            raise
 
         mode_str = "callback" if handle._is_callback_mode else "iterator"
         logger.info(f"Created {mode_str} subscription for {len(drfs)} devices")
