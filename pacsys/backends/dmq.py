@@ -170,6 +170,7 @@ class _ReadJob:
     drf_to_all_indices: dict[str, list[int]] = field(default_factory=dict)
     readings: dict[int, Reading] = field(default_factory=dict)
     done_event: threading.Event = field(default_factory=threading.Event)
+    error: Optional[Exception] = None  # GSS or setup error
     channel: Optional[Channel] = None
     exchange_name: str = ""
     queue_name: str = ""
@@ -799,6 +800,13 @@ class DMQBackend(Backend):
                 job.done_event.wait(timeout=5.0)
 
         # Build result list
+        if job.error is not None:
+            backfill_code = ERR_RETRY
+            backfill_msg = f"Authentication failed: {job.error}"
+        else:
+            backfill_code = ERR_TIMEOUT
+            backfill_msg = "Request timeout"
+
         result: list[Reading] = []
         for i, drf in enumerate(drfs):
             if i in job.readings:
@@ -810,9 +818,9 @@ class DMQBackend(Backend):
                         value_type=ValueType.SCALAR,
                         tag=i + 1,
                         facility_code=FACILITY_ACNET,
-                        error_code=ERR_TIMEOUT,
+                        error_code=backfill_code,
                         value=None,
-                        message="Request timeout",
+                        message=backfill_msg,
                         timestamp=None,
                         cycle=0,
                     )
@@ -851,6 +859,7 @@ class DMQBackend(Backend):
 
             def on_gss_error(exc):
                 logger.error(f"GSS context creation failed for read: {exc}")
+                job.error = exc
                 self._complete_read(job)
 
             self._create_gss_auth(on_gss_done, on_gss_error)
@@ -1045,9 +1054,15 @@ class DMQBackend(Backend):
 
     def _on_standby_channel_closed(self, channel: Channel, reason: Exception, exchange_name: str) -> None:
         """Standby channel closed unexpectedly (IO thread)."""
-        # Remove from pool if present
+        prev_len = len(self._standby_channels)
         self._standby_channels = [s for s in self._standby_channels if s.channel is not channel]
+        if len(self._standby_channels) == prev_len:
+            # Channel wasn't in the ready pool — still being set up
+            self._standby_pending = max(0, self._standby_pending - 1)
         logger.debug(f"Standby channel closed: {reason}")
+        # Replenish pool to replace the lost channel
+        if not self._closed:
+            self._replenish_standby_pool()
 
     # ─────────────────────────────────────────────────────────────────────────
     # Write Session Heartbeats (runs on IO thread)
@@ -1179,21 +1194,25 @@ class DMQBackend(Backend):
         tracker: _WriteCompletionTracker,
     ) -> None:
         """Execute write_many on IO thread."""
-        # Group by init_drf (property-aware, not just device name)
-        by_init_drf: dict[str, list[tuple[int, str, Value]]] = defaultdict(list)
-        for i, (drf, value) in enumerate(settings):
-            init_drf = prepare_for_write(drf)
-            by_init_drf[init_drf].append((i, drf, value))
+        try:
+            # Group by init_drf (property-aware, not just device name)
+            by_init_drf: dict[str, list[tuple[int, str, Value]]] = defaultdict(list)
+            for i, (drf, value) in enumerate(settings):
+                init_drf = prepare_for_write(drf)
+                by_init_drf[init_drf].append((i, drf, value))
 
-        tracker.total_devices = len(by_init_drf)
+            tracker.total_devices = len(by_init_drf)
 
-        if tracker.total_devices == 0:
-            tracker.done_event.set()
-            return
+            if tracker.total_devices == 0:
+                tracker.done_event.set()
+                return
 
-        # Process each init_drf (parallel on IO thread - all non-blocking)
-        for init_drf, drf_settings in by_init_drf.items():
-            self._write_to_device_async(init_drf, drf_settings, results, tracker)
+            # Process each init_drf (parallel on IO thread - all non-blocking)
+            for init_drf, drf_settings in by_init_drf.items():
+                self._write_to_device_async(init_drf, drf_settings, results, tracker)
+        except Exception as e:
+            logger.error(f"Failed to prepare write batch: {e}")
+            tracker.abort(e)
 
     def _write_to_device_async(
         self,
@@ -1352,10 +1371,13 @@ class DMQBackend(Backend):
         self._schedule_write_session_heartbeat(session)
         self._schedule_write_session_cleanup(session)
 
-        # Brief delay for INIT processing, then send settings
+        # Brief delay for server-side INIT processing.  The server must
+        # bind S.# on the session exchange before SETTING messages can be
+        # routed; without a protocol-level ack we need a short wait.
+        # Server-side binding is synchronous (~1-2ms on local broker).
         if self._select_connection is not None:
             self._select_connection.ioloop.call_later(
-                0.05,  # 50ms for INIT to process
+                0.01,  # 10ms — server INIT is synchronous, ~2ms typical
                 lambda: self._send_settings_async(session, drf_settings, results, tracker),
             )
 
@@ -1544,13 +1566,17 @@ class DMQBackend(Backend):
                 continue
             if not session.pending:
                 continue
-            # Mark all pending writes as timed out
+            # Mark all pending writes as timed out — signal each tracker once
+            trackers: dict[int, _WriteCompletionTracker] = {}
             for corr_id, (i, drf, results, tracker) in list(session.pending.items()):
                 if results[i] is None:
                     results[i] = WriteResult(
                         drf=drf, facility_code=FACILITY_ACNET, error_code=ERR_TIMEOUT, message="Request timeout"
                     )
+                trackers.setdefault(id(tracker), tracker)
             session.pending.clear()
+            for tracker in trackers.values():
+                tracker.device_complete()
             # Close the session - it's in a bad state (e.g. stuck after PENDING)
             self._close_write_session(init_drf, reason="timed out")
 

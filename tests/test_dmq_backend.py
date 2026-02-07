@@ -549,6 +549,32 @@ class TestDMQBackendRead:
             assert reading.error_code == -6  # ACNET_REQTMO
             assert "timeout" in reading.message.lower()
 
+    def test_read_gss_failure_reports_auth_error(self):
+        """Test that GSS auth failure during read returns ERR_RETRY, not ERR_TIMEOUT.
+
+        Regression: previously, GSS errors were masked as ERR_TIMEOUT because
+        on_gss_error just called _complete_read without storing the error.
+        """
+        factory, mock_conn = create_mock_select_connection_factory([])
+        with (
+            _mock_gssapi(),
+            mock.patch.object(SelectConnection, "__new__", side_effect=factory),
+            mock.patch.object(
+                DMQBackend,
+                "_create_gss_context",
+                side_effect=AuthenticationError("Kerberos ticket expired"),
+            ),
+        ):
+            backend = DMQBackend(host="localhost", auth=_create_mock_auth())
+            try:
+                reading = backend.get(TEMP_DEVICE, timeout=2.0)
+                assert reading.is_error
+                assert reading.error_code == -1, f"Expected ERR_RETRY (-1) for auth failure, got {reading.error_code}"
+                assert "Authentication failed" in reading.message
+                assert "Kerberos ticket expired" in reading.message
+            finally:
+                backend.close()
+
     def test_read_closed_backend(self):
         """Test that read on closed backend raises RuntimeError."""
         with _mock_gssapi():
