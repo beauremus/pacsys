@@ -22,7 +22,6 @@ def sample_reading():
     return Reading(
         drf="M:OUTTMP",
         value_type=ValueType.SCALAR,
-        tag=1,
         facility_code=0,
         error_code=0,
         value=72.5,
@@ -44,7 +43,6 @@ def error_reading():
     return Reading(
         drf="M:BADDEV",
         value_type=ValueType.SCALAR,
-        tag=1,
         facility_code=0,
         error_code=-42,
         value=None,
@@ -63,7 +61,6 @@ def mock_backend():
     backend.get.return_value = Reading(
         drf="M:OUTTMP",
         value_type=ValueType.SCALAR,
-        tag=1,
         facility_code=0,
         error_code=0,
         value=72.5,

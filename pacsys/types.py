@@ -111,7 +111,6 @@ class Reading:
 
     drf: str
     value_type: ValueType
-    tag: Optional[int] = None
     facility_code: int = 0
     error_code: int = 0
     value: Optional[Value] = None

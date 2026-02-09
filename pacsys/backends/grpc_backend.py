@@ -10,11 +10,10 @@ Requires grpcio package. See SPECIFICATION.md for protocol details.
 
 import asyncio
 import logging
-import queue
 import threading
 import time
 from datetime import datetime
-from typing import Iterator, Optional
+from typing import Optional
 
 import numpy as np
 
@@ -24,6 +23,7 @@ from pacsys.backends import Backend, validate_alarm_dict
 from pacsys.drf_utils import prepare_for_write
 from pacsys.errors import AuthenticationError, DeviceError
 from pacsys.backends._dispatch import CallbackDispatcher
+from pacsys.backends._subscription import BufferedSubscriptionHandle
 from pacsys.types import (
     BackendCapability,
     DispatchMode,
@@ -70,22 +70,14 @@ DEFAULT_TIMEOUT = 5.0
 _RECONNECT_INITIAL_DELAY = 1.0
 _RECONNECT_MAX_DELAY = 30.0
 _RECONNECT_BACKOFF_FACTOR = 2.0
-_DEFAULT_QUEUE_MAXSIZE = 10000
 
-# gRPC status code classification
-# CANCELLED is retryable because server restarts/shutdowns trigger it and the
-# subscription should recover. Only truly non-recoverable codes are fatal.
-_FATAL_STATUS_CODES = (
-    frozenset(
-        {
-            grpc.StatusCode.UNAUTHENTICATED,
-            grpc.StatusCode.PERMISSION_DENIED,
-            grpc.StatusCode.INVALID_ARGUMENT,
-        }
-    )
-    if GRPC_AVAILABLE
-    else frozenset()
-)
+# gRPC status codes the DPM server actually produces:
+#   UNAVAILABLE  — server down / connection refused (gRPC transport)
+#   CANCELLED    — client cancel or server shutdown mid-stream
+#   DEADLINE_EXCEEDED — client-side timeout (handled separately in _grpc_error_code)
+#   UNKNOWN      — unhandled Java exception in set() path only
+# The DPM server never returns UNAUTHENTICATED, PERMISSION_DENIED, or
+# INVALID_ARGUMENT — auth failures are ACNET errors inside ReadingReply.status.
 _RETRYABLE_STATUS_CODES = (
     frozenset({grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.CANCELLED}) if GRPC_AVAILABLE else frozenset()
 )
@@ -252,7 +244,7 @@ def _reply_to_readings(reply, drfs: list[str]) -> list[Reading]:
     DPMListGRPC.sendReply(WhatDaq, double[], long[], long)).
     """
     index = reply.index
-    if index >= len(drfs):
+    if index < 0 or index >= len(drfs):
         logger.warning(f"Received reply for unknown index {index}")
         return []
 
@@ -386,7 +378,7 @@ class _DaqCore:
                     continue
 
                 index = reply.index
-                if index >= len(drfs) or results[index] is not None:
+                if index < 0 or index >= len(drfs) or results[index] is not None:
                     continue
 
                 readings = _reply_to_readings(reply, drfs)
@@ -458,7 +450,7 @@ class _DaqCore:
                 setting.device = drf
                 setting.value.CopyFrom(_value_to_proto_value(value, for_write=True))
                 valid_items.append((i, drf, setting))
-            except ValueError as e:
+            except (ValueError, NotImplementedError) as e:
                 logger.error(f"Failed to convert value for {drf}: {e}")
                 validation_errors[i] = str(e)
 
@@ -588,33 +580,17 @@ class _DaqCore:
                 code = e.code()
                 ec = _grpc_error_code(e)
                 fc = _grpc_facility_code(e)
-                if code in _FATAL_STATUS_CODES:
-                    exc = DeviceError(
-                        drf=drfs[0] if drfs else "?",
-                        facility_code=fc,
-                        error_code=ec,
-                        message=f"Fatal gRPC error ({target}): {code.name}: {e.details()}",
-                    )
-                    error_fn(exc, fatal=True)
-                    return
+                exc = DeviceError(
+                    drf=drfs[0] if drfs else "?",
+                    facility_code=fc,
+                    error_code=ec,
+                    message=f"gRPC stream error ({target}): {code.name}: {e.details()}",
+                )
+                error_fn(exc, fatal=False)
                 if code in _RETRYABLE_STATUS_CODES:
-                    exc = DeviceError(
-                        drf=drfs[0] if drfs else "?",
-                        facility_code=fc,
-                        error_code=ec,
-                        message=f"gRPC stream error ({target}, retrying): {code.name}: {e.details()}",
-                    )
-                    error_fn(exc, fatal=False)
-                    logger.warning(f"gRPC stream UNAVAILABLE ({target}), retrying in {backoff:.1f}s: {e.details()}")
+                    logger.warning(f"gRPC stream {code.name} ({target}), retrying in {backoff:.1f}s: {e.details()}")
                 else:
-                    exc = DeviceError(
-                        drf=drfs[0] if drfs else "?",
-                        facility_code=fc,
-                        error_code=ec,
-                        message=f"gRPC stream error ({target}): {code.name}: {e.details()}",
-                    )
-                    error_fn(exc, fatal=False)
-                    logger.error(f"gRPC stream error {code.name} ({target}), retrying in {backoff:.1f}s")
+                    logger.error(f"gRPC stream {code.name} ({target}), retrying in {backoff:.1f}s: {e.details()}")
 
             except Exception as e:
                 if stop_check():
@@ -641,7 +617,7 @@ class _DaqCore:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class _GRPCSubscriptionHandle(SubscriptionHandle):
+class _GRPCSubscriptionHandle(BufferedSubscriptionHandle):
     """Concrete SubscriptionHandle for the async GRPCBackend."""
 
     def __init__(
@@ -651,84 +627,34 @@ class _GRPCSubscriptionHandle(SubscriptionHandle):
         callback: Optional[ReadingCallback],
         on_error: Optional[ErrorCallback],
     ):
+        super().__init__()
         self._backend = backend
         self._drfs = drfs
         self._callback = callback
         self._on_error = on_error
         self._is_callback_mode = callback is not None
-        self._queue: queue.Queue[Reading] = queue.Queue(maxsize=_DEFAULT_QUEUE_MAXSIZE)
-        self._stopped = False
-        self._ref_ids: list[int] = list(range(len(drfs)))
-        self._exc: Optional[Exception] = None
+        self._ref_ids = list(range(len(drfs)))
         self._task: Optional[asyncio.Task] = None
-        self._drop_count = 0
-        self._last_drop_log = 0.0
-
-    @property
-    def ref_ids(self) -> list[int]:
-        return list(self._ref_ids)
-
-    @property
-    def stopped(self) -> bool:
-        return self._stopped
-
-    @property
-    def exc(self) -> Optional[Exception]:
-        return self._exc
 
     def _dispatch(self, reading: Reading) -> None:
         """Called from the reactor thread to deliver a reading."""
         if self._stopped:
             return
-
         if self._callback is not None:
             self._backend._dispatcher.dispatch_reading(self._callback, reading, self)
         else:
-            try:
-                self._queue.put_nowait(reading)
-            except queue.Full:
-                self._drop_count += 1
-                now = time.monotonic()
-                if now - self._last_drop_log >= 5.0:
-                    logger.warning(
-                        f"gRPC subscription queue full ({_DEFAULT_QUEUE_MAXSIZE}), dropped {self._drop_count} readings"
-                    )
-                    self._drop_count = 0
-                    self._last_drop_log = now
+            super()._dispatch(reading)
 
     def _dispatch_error(self, exc: Exception, *, fatal: bool) -> None:
-        """Called from the reactor thread on stream error."""
-        if fatal:
-            self._exc = exc
+        """Called from the reactor thread on stream error.
 
+        Only fatal errors stop the iterator — retryable errors are handled by
+        the stream's reconnection loop and should not terminate consumption.
+        """
+        if fatal:
+            self._signal_error(exc)
         if self._on_error is not None:
             self._backend._dispatcher.dispatch_error(self._on_error, exc, self)
-
-    def readings(
-        self,
-        timeout: Optional[float] = None,
-    ) -> Iterator[tuple[Reading, SubscriptionHandle]]:
-        if self._is_callback_mode:
-            raise RuntimeError("Cannot iterate subscription with callback; readings are pushed to callback")
-
-        start_time = time.monotonic()
-
-        while not self._stopped:
-            if self._exc is not None:
-                raise self._exc
-
-            try:
-                reading = self._queue.get(timeout=0.1)
-                yield (reading, self)
-            except queue.Empty:
-                if self._exc is not None:
-                    raise self._exc
-
-                if timeout == 0:
-                    break
-                elif timeout is not None:
-                    if time.monotonic() - start_time >= timeout:
-                        break
 
     def stop(self) -> None:
         if not self._stopped:
@@ -878,7 +804,7 @@ class GRPCBackend(Backend):
         effective_timeout = timeout if timeout is not None else self._timeout
         fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
         try:
-            return fut.result(timeout=effective_timeout + 5.0)
+            return fut.result(timeout=effective_timeout + 1.0)
         except Exception:
             fut.cancel()
             raise
@@ -1025,20 +951,28 @@ class GRPCBackend(Backend):
                         handle._dispatch_error,
                     )
                 finally:
-                    handle._stopped = True
+                    handle._signal_stop()
+                    with self._handles_lock:
+                        if handle in self._handles:
+                            self._handles.remove(handle)
 
             return asyncio.ensure_future(_run_stream())
+
+        with self._handles_lock:
+            if self._closed:
+                raise RuntimeError("Backend is closed")
+            self._handles.append(handle)
 
         fut = asyncio.run_coroutine_threadsafe(_create_task(), self._loop)
         try:
             handle._task = fut.result(timeout=5.0)
         except Exception:
             fut.cancel()
-            handle._stopped = True
+            handle._signal_stop()
+            with self._handles_lock:
+                if handle in self._handles:
+                    self._handles.remove(handle)
             raise
-
-        with self._handles_lock:
-            self._handles.append(handle)
 
         mode_str = "callback" if handle._is_callback_mode else "iterator"
         logger.info(f"Created {mode_str} subscription for {len(drfs)} devices via gRPC")
@@ -1049,7 +983,7 @@ class GRPCBackend(Backend):
         if not isinstance(handle, _GRPCSubscriptionHandle):
             raise TypeError(f"Expected _GRPCSubscriptionHandle, got {type(handle).__name__}")
 
-        handle._stopped = True
+        handle._signal_stop()
 
         if handle._task is not None and self._loop is not None:
             self._loop.call_soon_threadsafe(handle._task.cancel)
@@ -1067,7 +1001,7 @@ class GRPCBackend(Backend):
             self._handles.clear()
 
         for handle in handles:
-            handle._stopped = True
+            handle._signal_stop()
             if handle._task is not None and self._loop is not None:
                 self._loop.call_soon_threadsafe(handle._task.cancel)
 

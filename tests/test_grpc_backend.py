@@ -11,12 +11,15 @@ Tests cover:
 - Error handling
 - Bounded queue overflow
 - Reactor lifecycle
+- _DaqCore.stream reconnection and backoff
 - Uses stub mocking for unit tests (requires real proto files)
 """
 
+import asyncio
 import logging
 import os
-import queue
+import time
+from datetime import datetime
 from unittest import mock
 
 import pytest
@@ -46,6 +49,7 @@ if not GRPC_AVAILABLE:
     pytest.skip("grpc and proto files not available", allow_module_level=True)
 
 import grpc  # noqa: E402
+import numpy as np  # noqa: E402
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -109,6 +113,33 @@ class AsyncErrorIterator:
 
     def cancel(self):
         pass
+
+
+class AsyncReplyThenError:
+    """Yields replies, then raises error. Tracks cancel()."""
+
+    def __init__(self, replies, error=None):
+        self._replies = list(replies)
+        self._idx = 0
+        self._error = error
+        self.cancelled = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.cancelled:
+            raise StopAsyncIteration
+        if self._idx < len(self._replies):
+            r = self._replies[self._idx]
+            self._idx += 1
+            return r
+        if self._error:
+            raise self._error
+        raise StopAsyncIteration
+
+    def cancel(self):
+        self.cancelled = True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -716,10 +747,10 @@ class TestStatusCodeNormalization:
 
 
 class TestBoundedQueue:
-    """Tests for bounded FIFO queue in subscription handle."""
+    """Tests for bounded buffer in subscription handle."""
 
     def test_queue_overflow_drops_and_warns(self, caplog):
-        """When the queue is full, new readings are dropped with a warning."""
+        """When the buffer is full, new readings are dropped with a warning."""
         backend = grpc_backend.GRPCBackend()
         try:
             handle = grpc_backend._GRPCSubscriptionHandle(
@@ -728,8 +759,7 @@ class TestBoundedQueue:
                 callback=None,
                 on_error=None,
             )
-            # Use a tiny queue for testing
-            handle._queue = queue.Queue(maxsize=2)
+            handle._maxsize = 2
 
             r1 = Reading(drf="M:OUTTMP", value_type=ValueType.SCALAR, value=1.0)
             r2 = Reading(drf="M:OUTTMP", value_type=ValueType.SCALAR, value=2.0)
@@ -738,14 +768,14 @@ class TestBoundedQueue:
             handle._dispatch(r1)
             handle._dispatch(r2)
 
-            with caplog.at_level(logging.WARNING, logger="pacsys.backends.grpc_backend"):
+            with caplog.at_level(logging.WARNING, logger="pacsys.backends._subscription"):
                 handle._dispatch(r3)
 
-            assert handle._queue.qsize() == 2
+            assert len(handle._buf) == 2
             # Oldest readings survive (FIFO)
-            assert handle._queue.get_nowait().value == 1.0
-            assert handle._queue.get_nowait().value == 2.0
-            assert any("queue full" in rec.message for rec in caplog.records)
+            assert handle._buf[0].value == 1.0
+            assert handle._buf[1].value == 2.0
+            assert any("buffer full" in rec.message.lower() for rec in caplog.records)
         finally:
             backend.close()
 
@@ -804,6 +834,447 @@ class TestReactorLifecycle:
             assert backend._reactor_thread is None
         finally:
             backend.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# _DaqCore.stream Tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestDaqCoreStream:
+    """Tests for _DaqCore.stream reconnection and backoff logic."""
+
+    @staticmethod
+    def _core(stub):
+        core = grpc_backend._DaqCore("localhost", 23456, None, 5.0)
+        core._stub = stub
+        return core
+
+    @staticmethod
+    def _run(coro):
+        return asyncio.run(coro)
+
+    # -- Normal completion: no reconnect -----------------------------------
+
+    def test_normal_completion_no_reconnect(self):
+        """Stream that ends normally exits without retry."""
+        stub = mock.MagicMock()
+        stub.Read.return_value = AsyncMockIterator([make_reading_reply(0, scalar_value=42.0)])
+
+        dispatched, errors = [], []
+        self._run(
+            self._core(stub).stream(
+                drfs=["M:OUTTMP@p,1000"],
+                dispatch_fn=dispatched.append,
+                stop_check=lambda: False,
+                error_fn=lambda e, fatal: errors.append(e),
+            )
+        )
+
+        assert stub.Read.call_count == 1
+        assert len(dispatched) == 1
+        assert dispatched[0].value == 42.0
+        assert not errors
+
+    # -- CancelledError: clean exit ----------------------------------------
+
+    def test_cancelled_error_no_retry_no_callback(self):
+        """CancelledError exits without error callback or retry."""
+        stub = mock.MagicMock()
+
+        class _Cancelled:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise asyncio.CancelledError
+
+            def cancel(self):
+                pass
+
+        stub.Read.return_value = _Cancelled()
+        errors = []
+
+        self._run(
+            self._core(stub).stream(
+                drfs=["M:OUTTMP@p,1000"],
+                dispatch_fn=lambda r: None,
+                stop_check=lambda: False,
+                error_fn=lambda e, fatal: errors.append((e, fatal)),
+            )
+        )
+
+        assert stub.Read.call_count == 1
+        assert not errors
+
+    # -- Backoff exponential growth + ceiling ------------------------------
+
+    def test_backoff_sequence_and_ceiling(self):
+        """Backoff doubles per retry, capped at 30s."""
+        stub = mock.MagicMock()
+        n = [0]
+
+        def make_call(*a, **kw):
+            n[0] += 1
+            if n[0] <= 7:
+                return AsyncErrorIterator(grpc.StatusCode.UNAVAILABLE, "down")
+            return AsyncMockIterator([])  # normal end
+
+        stub.Read.side_effect = make_call
+        sleeps = []
+
+        async def fake_sleep(t):
+            sleeps.append(t)
+
+        with mock.patch("asyncio.sleep", side_effect=fake_sleep):
+            self._run(
+                self._core(stub).stream(
+                    drfs=["M:OUTTMP@p,1000"],
+                    dispatch_fn=lambda r: None,
+                    stop_check=lambda: False,
+                    error_fn=lambda e, fatal: None,
+                )
+            )
+
+        assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0]
+
+    # -- Backoff resets after sustained healthy streaming -------------------
+
+    def test_backoff_resets_after_sustained_streaming(self):
+        """After 30s of healthy data, backoff resets to initial on next error."""
+        stub = mock.MagicMock()
+        reply = make_reading_reply(0, scalar_value=1.0)
+        n = [0]
+
+        def make_call(*a, **kw):
+            n[0] += 1
+            if n[0] == 1:
+                return AsyncErrorIterator(grpc.StatusCode.UNAVAILABLE, "down")
+            if n[0] == 2:
+                return AsyncErrorIterator(grpc.StatusCode.UNAVAILABLE, "down")
+            if n[0] == 3:
+                # Healthy stream for "31s" (mocked) then error
+                return AsyncReplyThenError(
+                    [reply] * 3,
+                    AsyncMockRpcError(grpc.StatusCode.UNAVAILABLE, "down"),
+                )
+            if n[0] == 4:
+                return AsyncErrorIterator(grpc.StatusCode.UNAVAILABLE, "down")
+            return AsyncMockIterator([])
+
+        stub.Read.side_effect = make_call
+        sleeps = []
+
+        async def fake_sleep(t):
+            sleeps.append(t)
+
+        # Proxy time module — only intercept monotonic(), leave asyncio alone
+        mono_values = iter(
+            [
+                0,  # attempt 1: stream_start (error before any reply check)
+                10,  # attempt 2: stream_start (error before any reply check)
+                100,  # attempt 3: stream_start
+                110,  # attempt 3, reply 1: 110-100=10 < 30
+                120,  # attempt 3, reply 2: 120-100=20 < 30
+                131,  # attempt 3, reply 3: 131-100=31 >= 30 → RESET
+                200,  # attempt 4: stream_start (error before any reply check)
+                300,  # attempt 5: stream_start
+            ]
+        )
+
+        class _TimeProxy:
+            """Intercept monotonic() without breaking asyncio's time usage."""
+
+            def monotonic(self):
+                return next(mono_values)
+
+            def __getattr__(self, name):
+                return getattr(time, name)
+
+        with (
+            mock.patch("asyncio.sleep", side_effect=fake_sleep),
+            mock.patch.object(grpc_backend, "time", _TimeProxy()),
+        ):
+            self._run(
+                self._core(stub).stream(
+                    drfs=["M:OUTTMP@p,1000"],
+                    dispatch_fn=lambda r: None,
+                    stop_check=lambda: False,
+                    error_fn=lambda e, fatal: None,
+                )
+            )
+
+        # sleeps: 1.0 (err1), 2.0 (err2), 1.0 (reset! err3), 2.0 (err4)
+        assert sleeps == [1.0, 2.0, 1.0, 2.0]
+
+    # -- stop_check during iteration cancels call --------------------------
+
+    def test_stop_during_iteration_cancels_call(self):
+        """stop_check=True mid-stream cancels the gRPC call."""
+        stub = mock.MagicMock()
+        replies = [make_reading_reply(0, scalar_value=float(i)) for i in range(5)]
+        call = AsyncReplyThenError(replies)
+        stub.Read.return_value = call
+
+        count = [0]
+
+        def stop_after_2():
+            return count[0] >= 2
+
+        def dispatch(r):
+            count[0] += 1
+
+        self._run(
+            self._core(stub).stream(
+                drfs=["M:OUTTMP@p,1000"],
+                dispatch_fn=dispatch,
+                stop_check=stop_after_2,
+                error_fn=lambda e, fatal: None,
+            )
+        )
+
+        assert count[0] == 2
+        assert call.cancelled
+
+    # -- Error callback always fatal=False ---------------------------------
+
+    def test_error_callback_grpc_and_generic(self):
+        """Both gRPC and generic errors call error_fn with fatal=False."""
+        stub = mock.MagicMock()
+        n = [0]
+
+        def make_call(*a, **kw):
+            n[0] += 1
+            if n[0] == 1:
+                return AsyncErrorIterator(grpc.StatusCode.UNAVAILABLE, "srv down")
+            if n[0] == 2:
+                # Generic exception (not AioRpcError)
+                return AsyncReplyThenError([], RuntimeError("boom"))
+            return AsyncMockIterator([])
+
+        stub.Read.side_effect = make_call
+        errors = []
+
+        async def fake_sleep(t):
+            pass
+
+        with mock.patch("asyncio.sleep", side_effect=fake_sleep):
+            self._run(
+                self._core(stub).stream(
+                    drfs=["M:OUTTMP@p,1000"],
+                    dispatch_fn=lambda r: None,
+                    stop_check=lambda: False,
+                    error_fn=lambda e, fatal: errors.append((e, fatal)),
+                )
+            )
+
+        assert len(errors) == 2
+        assert all(fatal is False for _, fatal in errors)
+        assert all(isinstance(e, DeviceError) for e, _ in errors)
+        assert "UNAVAILABLE" in errors[0][0].message
+        assert "boom" in errors[1][0].message
+
+    # -- Retryable vs non-retryable log levels -----------------------------
+
+    def test_retryable_status_logs_warning(self, caplog):
+        """UNAVAILABLE logs WARNING; other codes log ERROR."""
+        stub = mock.MagicMock()
+        n = [0]
+
+        def make_call(*a, **kw):
+            n[0] += 1
+            if n[0] == 1:
+                return AsyncErrorIterator(grpc.StatusCode.UNAVAILABLE, "down")
+            if n[0] == 2:
+                return AsyncErrorIterator(grpc.StatusCode.UNKNOWN, "oops")
+            return AsyncMockIterator([])
+
+        stub.Read.side_effect = make_call
+
+        async def fake_sleep(t):
+            pass
+
+        with (
+            mock.patch("asyncio.sleep", side_effect=fake_sleep),
+            caplog.at_level(logging.WARNING, logger="pacsys.backends.grpc_backend"),
+        ):
+            self._run(
+                self._core(stub).stream(
+                    drfs=["M:OUTTMP@p,1000"],
+                    dispatch_fn=lambda r: None,
+                    stop_check=lambda: False,
+                    error_fn=lambda e, fatal: None,
+                )
+            )
+
+        warn_msgs = [r for r in caplog.records if r.levelno == logging.WARNING]
+        err_msgs = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert any("UNAVAILABLE" in r.message for r in warn_msgs)
+        assert any("UNKNOWN" in r.message for r in err_msgs)
+
+    # -- stop_check before backoff sleep exits immediately -----------------
+
+    def test_stop_before_backoff_skips_sleep(self):
+        """stop_check True after error_fn but before sleep → zero sleeps."""
+        stub = mock.MagicMock()
+        stub.Read.side_effect = lambda *a, **kw: AsyncErrorIterator(grpc.StatusCode.UNAVAILABLE, "down")
+        stop = [False]
+        mock_sleep = mock.AsyncMock()
+
+        with mock.patch("asyncio.sleep", mock_sleep):
+            self._run(
+                self._core(stub).stream(
+                    drfs=["M:OUTTMP@p,1000"],
+                    dispatch_fn=lambda r: None,
+                    stop_check=lambda: stop[0],
+                    error_fn=lambda e, fatal: stop.__setitem__(0, True),
+                )
+            )
+
+        # Pre-sleep guard (line 609) catches stop → no sleep at all
+        mock_sleep.assert_not_called()
+        assert stub.Read.call_count == 1
+
+    # -- stop_check True at entry → immediate return -----------------------
+
+    def test_stop_at_entry_does_nothing(self):
+        """stop_check=True from start → no Read call, no sleep."""
+        stub = mock.MagicMock()
+        mock_sleep = mock.AsyncMock()
+
+        with mock.patch("asyncio.sleep", mock_sleep):
+            self._run(
+                self._core(stub).stream(
+                    drfs=["M:OUTTMP@p,1000"],
+                    dispatch_fn=lambda r: None,
+                    stop_check=lambda: True,
+                    error_fn=lambda e, fatal: None,
+                )
+            )
+
+        stub.Read.assert_not_called()
+        mock_sleep.assert_not_called()
+
+    # -- Short stream does NOT reset backoff (negative control) ------------
+
+    def test_short_stream_does_not_reset_backoff(self):
+        """Stream healthy for <30s does NOT reset backoff."""
+        stub = mock.MagicMock()
+        reply = make_reading_reply(0, scalar_value=1.0)
+        n = [0]
+
+        def make_call(*a, **kw):
+            n[0] += 1
+            if n[0] == 1:
+                return AsyncErrorIterator(grpc.StatusCode.UNAVAILABLE, "down")
+            if n[0] == 2:
+                # Short healthy stream (10s < 30s) then error
+                return AsyncReplyThenError(
+                    [reply] * 2,
+                    AsyncMockRpcError(grpc.StatusCode.UNAVAILABLE, "down"),
+                )
+            if n[0] == 3:
+                return AsyncErrorIterator(grpc.StatusCode.UNAVAILABLE, "down")
+            return AsyncMockIterator([])
+
+        stub.Read.side_effect = make_call
+        sleeps = []
+
+        async def fake_sleep(t):
+            sleeps.append(t)
+
+        # All monotonic deltas stay < 30s
+        mono_values = iter(
+            [
+                0,  # attempt 1: stream_start (error immediately)
+                100,  # attempt 2: stream_start
+                105,  # attempt 2, reply 1: 105-100=5 < 30
+                110,  # attempt 2, reply 2: 110-100=10 < 30  → NO reset
+                200,  # attempt 3: stream_start (error immediately)
+                300,  # attempt 4: stream_start
+            ]
+        )
+
+        class _TimeProxy:
+            def monotonic(self):
+                return next(mono_values)
+
+            def __getattr__(self, name):
+                return getattr(time, name)
+
+        with (
+            mock.patch("asyncio.sleep", side_effect=fake_sleep),
+            mock.patch.object(grpc_backend, "time", _TimeProxy()),
+        ):
+            self._run(
+                self._core(stub).stream(
+                    drfs=["M:OUTTMP@p,1000"],
+                    dispatch_fn=lambda r: None,
+                    stop_check=lambda: False,
+                    error_fn=lambda e, fatal: None,
+                )
+            )
+
+        # sleeps: 1.0 (err1), 2.0 (err2 — NOT reset), 4.0 (err3 — keeps growing)
+        assert sleeps == [1.0, 2.0, 4.0]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# _aggregate_timed_readings Tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestAggregateTimedReadings:
+    """Tests for _aggregate_timed_readings — collapses scalar readings into TIMED_SCALAR_ARRAY."""
+
+    def test_basic_aggregation(self):
+        """Multiple scalar readings → single TIMED_SCALAR_ARRAY with correct shape."""
+        ts1 = datetime(2024, 1, 1, 0, 0, 0)
+        ts2 = datetime(2024, 1, 1, 0, 0, 1)
+        ts3 = datetime(2024, 1, 1, 0, 0, 2)
+        readings = [
+            Reading(drf="M:OUTTMP", value_type=ValueType.SCALAR, value=1.0, timestamp=ts1),
+            Reading(drf="M:OUTTMP", value_type=ValueType.SCALAR, value=2.5, timestamp=ts2),
+            Reading(drf="M:OUTTMP", value_type=ValueType.SCALAR, value=3.0, timestamp=ts3),
+        ]
+
+        result = grpc_backend._aggregate_timed_readings(readings)
+
+        assert result.value_type == ValueType.TIMED_SCALAR_ARRAY
+        assert result.drf == "M:OUTTMP"
+        assert result.timestamp == ts1
+        np.testing.assert_array_equal(result.value["data"], [1.0, 2.5, 3.0])
+        assert result.value["micros"].dtype == np.int64
+        assert len(result.value["micros"]) == 3
+
+    def test_timestamps_to_micros(self):
+        """Timestamps are converted to integer microseconds since epoch."""
+        ts = datetime(2024, 6, 15, 12, 0, 0)
+        expected_micros = int(ts.timestamp() * 1e6)
+        readings = [Reading(drf="D:TEST", value_type=ValueType.SCALAR, value=42.0, timestamp=ts)]
+
+        result = grpc_backend._aggregate_timed_readings(readings)
+
+        assert result.value["micros"][0] == expected_micros
+
+    def test_none_timestamp_becomes_zero(self):
+        """A reading with timestamp=None produces micros=0."""
+        readings = [Reading(drf="D:TEST", value_type=ValueType.SCALAR, value=1.0, timestamp=None)]
+
+        result = grpc_backend._aggregate_timed_readings(readings)
+
+        assert result.value["micros"][0] == 0
+
+    def test_single_reading(self):
+        """Single-element list produces length-1 arrays."""
+        ts = datetime(2024, 1, 1)
+        readings = [Reading(drf="D:TEST", value_type=ValueType.SCALAR, value=99.0, timestamp=ts)]
+
+        result = grpc_backend._aggregate_timed_readings(readings)
+
+        assert result.value["data"].shape == (1,)
+        assert result.value["micros"].shape == (1,)
+        assert result.value["data"][0] == 99.0
 
 
 if __name__ == "__main__":

@@ -8,11 +8,10 @@ See SPECIFICATION.md for protocol details.
 
 import asyncio
 import logging
-import queue
 import struct
 import threading
 import time
-from typing import Iterator, Optional
+from typing import Optional
 
 import numpy as np
 
@@ -29,6 +28,7 @@ from pacsys.backends import Backend, timestamp_from_millis
 import socket
 
 from pacsys.backends._dispatch import CallbackDispatcher
+from pacsys.backends._subscription import BufferedSubscriptionHandle
 from pacsys.dpm_connection import DPM_HANDSHAKE, MAX_MESSAGE_SIZE, DPMConnection, DPMConnectionError
 from pacsys.errors import AuthenticationError, DeviceError
 from pacsys.pool import ConnectionPool
@@ -85,7 +85,6 @@ DEFAULT_HOST = "acsys-proxy.fnal.gov"
 DEFAULT_PORT = 6802
 DEFAULT_POOL_SIZE = 4
 DEFAULT_TIMEOUT = 5.0
-_DEFAULT_QUEUE_MAXSIZE = 10000
 _MAX_WRITE_CONNECTIONS = 4  # max concurrent write connections (pooled + in-flight)
 
 # Kerberos service principal for DPM
@@ -327,7 +326,7 @@ class _WriteConnection:
             pass
 
 
-class _DPMHTTPSubscriptionHandle(SubscriptionHandle):
+class _DPMHTTPSubscriptionHandle(BufferedSubscriptionHandle):
     """Subscription handle for DPMHTTPBackend.
 
     Each handle corresponds to one async task with its own TCP connection.
@@ -340,76 +339,14 @@ class _DPMHTTPSubscriptionHandle(SubscriptionHandle):
         callback: Optional[ReadingCallback],
         on_error: Optional[ErrorCallback] = None,
     ):
+        super().__init__()
         self._backend = backend
         self._drfs = drfs
         self._callback = callback
         self._is_callback_mode = callback is not None
         self._on_error = on_error
-        self._queue: queue.Queue[Reading] = queue.Queue(maxsize=_DEFAULT_QUEUE_MAXSIZE)
-        self._stopped = False
-        self._exc: Optional[Exception] = None
-        self._ref_ids: list[int] = list(range(1, len(drfs) + 1))
+        self._ref_ids = list(range(1, len(drfs) + 1))
         self._task: Optional[asyncio.Task] = None
-
-    @property
-    def ref_ids(self) -> list[int]:
-        """Reference IDs for devices in this subscription."""
-        return list(self._ref_ids)
-
-    @property
-    def stopped(self) -> bool:
-        """True if this subscription has been stopped."""
-        return self._stopped
-
-    @property
-    def exc(self) -> Optional[Exception]:
-        """Exception if an error occurred, else None."""
-        return self._exc
-
-    def readings(
-        self,
-        timeout: Optional[float] = None,
-    ) -> Iterator[tuple[Reading, SubscriptionHandle]]:
-        """Yield (reading, handle) pairs for this subscription.
-
-        Args:
-            timeout: Seconds to wait for readings.
-                    None = block forever (until stop() called)
-                    0 = non-blocking (drain buffered readings only)
-
-        Yields:
-            (reading, handle) pairs
-
-        Raises:
-            RuntimeError: If subscription has a callback
-            Exception: If connection error occurred
-        """
-        if self._is_callback_mode:
-            raise RuntimeError("Cannot iterate subscription with callback")
-
-        start_time = time.monotonic()
-
-        while not self._stopped:
-            if self._exc is not None:
-                raise self._exc
-
-            try:
-                reading = self._queue.get(timeout=0.1)
-                yield (reading, self)
-            except queue.Empty:
-                if self._exc is not None:
-                    raise self._exc
-
-                if self._stopped:
-                    break
-
-                if timeout == 0:
-                    break
-                elif timeout is not None:
-                    elapsed = time.monotonic() - start_time
-                    if elapsed >= timeout:
-                        break
-                continue
 
     def stop(self) -> None:
         """Stop this subscription and cancel its async task."""
@@ -696,7 +633,6 @@ class DPMHTTPBackend(Backend):
                     Reading(
                         drf=original_drf,
                         value_type=ValueType.SCALAR,
-                        tag=ref_id,
                         facility_code=facility,
                         error_code=error,
                         value=None,
@@ -711,7 +647,6 @@ class DPMHTTPBackend(Backend):
                     Reading(
                         drf=original_drf,
                         value_type=ValueType.SCALAR,
-                        tag=ref_id,
                         facility_code=FACILITY_ACNET,
                         error_code=ERR_TIMEOUT,
                         value=None,
@@ -1381,10 +1316,6 @@ class DPMHTTPBackend(Backend):
         metas: dict[int, DeviceMeta] = {}
         # DRF by ref_id for reading construction
         drf_map: dict[int, str] = {}
-        # Rate-limit queue overflow warnings
-        drop_count = 0
-        last_drop_log = 0.0
-
         try:
             await conn.connect()
             list_id = conn.list_id
@@ -1418,7 +1349,6 @@ class DPMHTTPBackend(Backend):
                             reading = Reading(
                                 drf=drf,
                                 value_type=ValueType.SCALAR,
-                                tag=reply.ref_id,
                                 facility_code=facility,
                                 error_code=error,
                                 value=None,
@@ -1430,10 +1360,7 @@ class DPMHTTPBackend(Backend):
                             if callback is not None:
                                 self._dispatcher.dispatch_reading(callback, reading, handle)
                             else:
-                                try:
-                                    handle._queue.put_nowait(reading)
-                                except queue.Full:
-                                    pass
+                                handle._dispatch(reading)
                     continue
 
                 if isinstance(reply, StartList_reply):
@@ -1460,31 +1387,18 @@ class DPMHTTPBackend(Backend):
                     if callback is not None:
                         self._dispatcher.dispatch_reading(callback, reading, handle)
                     else:
-                        try:
-                            handle._queue.put_nowait(reading)
-                        except queue.Full:
-                            drop_count += 1
-                            now = time.monotonic()
-                            if now - last_drop_log >= 5.0:
-                                logger.warning(
-                                    f"DPM subscription queue full ({_DEFAULT_QUEUE_MAXSIZE}), "
-                                    f"dropped {drop_count} readings"
-                                )
-                                drop_count = 0
-                                last_drop_log = now
+                        handle._dispatch(reading)
 
         except asyncio.CancelledError:
             pass  # Normal shutdown via task.cancel()
         except (asyncio.IncompleteReadError, DPMConnectionError, OSError) as e:
             if not handle._stopped:
-                handle._exc = e
-                handle._stopped = True
+                handle._signal_error(e)
                 if handle._on_error is not None:
                     self._dispatcher.dispatch_error(handle._on_error, e, handle)
         except Exception as e:
             if not handle._stopped:
-                handle._exc = e
-                handle._stopped = True
+                handle._signal_error(e)
                 logger.error(f"Unexpected streaming error: {e}")
                 if handle._on_error is not None:
                     self._dispatcher.dispatch_error(handle._on_error, e, handle)
@@ -1502,7 +1416,6 @@ class DPMHTTPBackend(Backend):
             return Reading(
                 drf=drf,
                 value_type=ValueType.SCALAR,
-                tag=reply.ref_id,
                 facility_code=facility,
                 error_code=error,
                 value=None,
@@ -1519,7 +1432,6 @@ class DPMHTTPBackend(Backend):
             return Reading(
                 drf=drf,
                 value_type=ValueType.SCALAR,
-                tag=reply.ref_id if hasattr(reply, "ref_id") else 0,
                 facility_code=FACILITY_ACNET,
                 error_code=ERR_RETRY,
                 value=None,
@@ -1539,7 +1451,6 @@ class DPMHTTPBackend(Backend):
         return Reading(
             drf=drf,
             value_type=value_type,
-            tag=reply.ref_id,
             facility_code=facility,
             error_code=error,
             value=value,
@@ -1597,7 +1508,7 @@ class DPMHTTPBackend(Backend):
             future = asyncio.run_coroutine_threadsafe(_create_task(), self._loop)
             handle._task = future.result(timeout=5.0)
         except Exception:
-            handle._stopped = True
+            handle._signal_stop()
             if future is not None:
                 future.cancel()
             with self._handles_lock:
@@ -1614,7 +1525,7 @@ class DPMHTTPBackend(Backend):
         if not isinstance(handle, _DPMHTTPSubscriptionHandle):
             raise TypeError(f"Expected _DPMHTTPSubscriptionHandle, got {type(handle).__name__}")
 
-        handle._stopped = True
+        handle._signal_stop()
 
         if handle._task is not None and self._loop is not None:
             self._loop.call_soon_threadsafe(handle._task.cancel)
@@ -1632,7 +1543,7 @@ class DPMHTTPBackend(Backend):
             self._handles.clear()
 
         for handle in handles:
-            handle._stopped = True
+            handle._signal_stop()
             if handle._task is not None and self._loop is not None:
                 self._loop.call_soon_threadsafe(handle._task.cancel)
 

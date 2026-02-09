@@ -55,14 +55,7 @@ Example (TCP - async via acsys-proxy):
 """
 
 from .connection import AcnetConnection
-from .connection_dpm import (
-    DPM_PROXY_HOST,
-    DPM_PROXY_PORT,
-    DPMConnection,
-    DPMError,
-    DPMReading,
-)
-from .dpm_acnet import DPMAcnet
+from .dpm_acnet import DPMAcnet, DPMError, DPMReading
 from .async_connection import (
     AsyncAcnetConnectionBase,
     AsyncAcnetConnectionTCP,
@@ -131,13 +124,9 @@ __all__ = [
     "AsyncRequestContext",
     "NodeStats",
     "ACSYS_PROXY_HOST",
-    # DPM Connection (direct HTTP)
-    "DPMConnection",
+    # DPM (via ACNET)
     "DPMError",
     "DPMReading",
-    "DPM_PROXY_HOST",
-    "DPM_PROXY_PORT",
-    # DPM Connection (via ACNET)
     "DPMAcnet",
     # Packets
     "AcnetPacket",

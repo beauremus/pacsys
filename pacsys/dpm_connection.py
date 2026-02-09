@@ -7,7 +7,6 @@ This module provides the foundational TCP connection to DPM with:
 - PC binary protocol marshaling/unmarshaling
 
 This is a building block for DPMBackend and other higher-level APIs.
-For full-featured DPM client with callbacks and threading, see acnet.connection_dpm.
 
 Protocol Flow:
 1. Connect to acsys-proxy.fnal.gov:6802 via TCP

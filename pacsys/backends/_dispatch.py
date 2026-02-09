@@ -80,6 +80,7 @@ class CallbackDispatcher:
         self._stop.set()
         if self._queue is not None:
             # Sentinel must bypass the maxsize bound
+            # Since stop event is set, one of puts will always succeed
             try:
                 self._queue.put_nowait(None)
             except queue.Full:
@@ -93,6 +94,7 @@ class CallbackDispatcher:
                 except queue.Full:
                     pass
         if self._thread is not None:
+            # If thread doesn't shutdown, ignore - it is a daemon
             self._thread.join(timeout=2.0)
             self._thread = None
 
@@ -135,7 +137,7 @@ class CallbackDispatcher:
                 fn(arg, handle)
             except Exception as e:
                 kind = "on_error" if is_error else "reading"
-                logger.error("Error in %s callback: %s", kind, e)
+                logger.error("Error in %s callback: %s", kind, e, exc_info=True)
 
     def _call_direct(
         self,
@@ -147,7 +149,7 @@ class CallbackDispatcher:
         try:
             callback(reading, handle)
         except Exception as e:
-            logger.error("Error in reading callback: %s", e)
+            logger.error("Error in reading callback: %s", e, exc_info=True)
             return
         elapsed = time.monotonic() - t0
         if elapsed > _SLOW_THRESHOLD:
@@ -163,7 +165,7 @@ class CallbackDispatcher:
         try:
             on_error(exc, handle)
         except Exception as e:
-            logger.error("Error in on_error callback: %s", e)
+            logger.error("Error in on_error callback: %s", e, exc_info=True)
             return
         elapsed = time.monotonic() - t0
         if elapsed > _SLOW_THRESHOLD:

@@ -259,17 +259,6 @@ def acnet_tcp_connection():
 
 
 @pytest.fixture
-def dpm_http_connection():
-    """Create a DPMConnection for low-level testing."""
-    from pacsys.acnet import DPMConnection
-
-    conn = DPMConnection()
-    conn.connect()
-    yield conn
-    conn.close()
-
-
-@pytest.fixture
 def dpm_acnet():
     """Create a DPMAcnet for low-level testing."""
     from pacsys.acnet import DPMAcnet

@@ -6,14 +6,13 @@ Uses RabbitMQ message broker to communicate with ACNET via the DMQ server.
 
 import logging
 import os
-import queue
 import socket
 import threading
 import time
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Iterator, Optional
+from typing import Any, Optional
 
 import numpy as np
 import pika
@@ -25,6 +24,7 @@ from pacsys.acnet.errors import ERR_OK, ERR_RETRY, ERR_TIMEOUT, FACILITY_ACNET
 from pacsys.auth import Auth, KerberosAuth
 from pacsys.backends import Backend, timestamp_from_millis, validate_alarm_dict
 from pacsys.backends._dispatch import CallbackDispatcher
+from pacsys.backends._subscription import BufferedSubscriptionHandle
 from pacsys.errors import AuthenticationError, DeviceError
 from pacsys.backends.dmq_protocol import (
     ReadingRequest_request,
@@ -79,7 +79,6 @@ TRACE = False
 
 DEFAULT_HOST = os.environ.get("PACSYS_DMQ_HOST", "appsrv2.fnal.gov")
 DEFAULT_PORT = int(os.environ.get("PACSYS_DMQ_PORT", "5672"))
-_DEFAULT_QUEUE_MAXSIZE = 10000
 DEFAULT_VHOST = "/"
 DEFAULT_TIMEOUT = 5.0
 INIT_EXCHANGE = "amq.topic"
@@ -344,7 +343,6 @@ def _reply_to_reading(reply, drf: str, ref_id: Optional[int] = None) -> Reading:
         return Reading(
             drf=drf,
             value_type=ValueType.SCALAR,
-            tag=getattr(reply, "ref_id", ref_id),
             facility_code=reply.facilityCode,
             error_code=reply.errorNumber,
             value=None,
@@ -359,7 +357,6 @@ def _reply_to_reading(reply, drf: str, ref_id: Optional[int] = None) -> Reading:
         return Reading(
             drf=drf,
             value_type=vtype,
-            tag=getattr(reply, "ref_id", ref_id),
             error_code=ERR_OK,
             value=extract(reply),
             timestamp=timestamp_from_millis(reply.time) if reply.time else None,
@@ -370,7 +367,6 @@ def _reply_to_reading(reply, drf: str, ref_id: Optional[int] = None) -> Reading:
     return Reading(
         drf=drf,
         value_type=ValueType.SCALAR,
-        tag=ref_id,
         facility_code=FACILITY_ACNET,
         error_code=ERR_RETRY,
         value=None,
@@ -417,7 +413,7 @@ def _resolve_reply(
     return reply, idx, ref_id
 
 
-class _DMQSubscriptionHandle(SubscriptionHandle):
+class _DMQSubscriptionHandle(BufferedSubscriptionHandle):
     """Subscription handle for DMQBackend."""
 
     def __init__(
@@ -428,75 +424,18 @@ class _DMQSubscriptionHandle(SubscriptionHandle):
         is_callback_mode: bool,
         on_error: Optional[ErrorCallback] = None,
     ):
+        super().__init__()
         self._backend = backend
         self._sub_id = sub_id
         self._drfs = drfs
         self._is_callback_mode = is_callback_mode
         self._on_error = on_error
-        self._queue: queue.Queue[Reading | None] = queue.Queue(maxsize=_DEFAULT_QUEUE_MAXSIZE)
-        self._stopped = False
-        self._exc: Optional[Exception] = None
-        self._ref_ids: list[int] = list(range(1, len(drfs) + 1))
-        self._drop_count = 0
-        self._last_drop_log = 0.0
-
-    @property
-    def ref_ids(self) -> list[int]:
-        return list(self._ref_ids)
-
-    @property
-    def stopped(self) -> bool:
-        return self._stopped
-
-    @property
-    def exc(self) -> Optional[Exception]:
-        return self._exc
-
-    def readings(
-        self,
-        timeout: Optional[float] = None,
-    ) -> Iterator[tuple[Reading, SubscriptionHandle]]:
-        if self._is_callback_mode:
-            raise RuntimeError("Cannot iterate subscription with callback")
-
-        start_time = time.monotonic()
-
-        while not self._stopped:
-            if self._exc is not None:
-                raise self._exc
-
-            # Compute how long to block on the queue
-            if timeout == 0:
-                wait = 0.0
-            elif timeout is not None:
-                wait = max(0.0, timeout - (time.monotonic() - start_time))
-                if wait == 0.0:
-                    break
-            else:
-                wait = None  # block indefinitely
-
-            try:
-                reading = self._queue.get(timeout=wait)
-            except queue.Empty:
-                break  # timeout == 0 or user timeout expired
-
-            if reading is None:
-                break  # sentinel - stop requested
-
-            yield (reading, self)
-
-    def _wake_queue(self) -> None:
-        """Push sentinel to unblock a reader waiting in readings()."""
-        try:
-            self._queue.put_nowait(None)
-        except queue.Full:
-            pass
+        self._ref_ids = list(range(1, len(drfs) + 1))
 
     def stop(self) -> None:
         if not self._stopped:
             self._backend.remove(self)
-            self._stopped = True
-            self._wake_queue()
+            self._signal_stop()
 
 
 @dataclass
@@ -779,7 +718,6 @@ class DMQBackend(Backend):
                     Reading(
                         drf=drf,
                         value_type=ValueType.SCALAR,
-                        tag=i + 1,
                         facility_code=FACILITY_ACNET,
                         error_code=backfill_code,
                         value=None,
@@ -1915,13 +1853,14 @@ class DMQBackend(Backend):
         self._write_sessions.clear()
 
         # Notify all active subscriptions of the connection loss
+        # Copy under lock, dispatch outside — callbacks may call remove()/stop_streaming()
         with self._stream_lock:
-            for sub in self._subscriptions.values():
-                sub.handle._exc = reason
-                sub.handle._stopped = True
-                sub.handle._wake_queue()
-                if sub.handle._on_error is not None:
-                    self._dispatcher.dispatch_error(sub.handle._on_error, reason, sub.handle)
+            subs = list(self._subscriptions.values())
+            self._subscriptions.clear()
+        for sub in subs:
+            sub.handle._signal_error(reason)
+            if sub.handle._on_error is not None:
+                self._dispatcher.dispatch_error(sub.handle._on_error, reason, sub.handle)
         # Stop the ioloop (will exit the thread)
         try:
             connection.ioloop.stop()
@@ -2023,10 +1962,12 @@ class DMQBackend(Backend):
     def _on_channel_closed(self, channel: Channel, reason: Exception, sub: _SelectSubscription) -> None:
         """Channel closed callback (runs in IO thread)."""
         logger.debug(f"Channel closed for sub {sub.sub_id[:8]}: {reason}")
-        sub.handle._stopped = True
-        sub.handle._wake_queue()
-        if sub.handle._on_error is not None and sub.handle._exc is None:
-            sub.handle._exc = reason
+        with self._stream_lock:
+            was_active = self._subscriptions.pop(sub.sub_id, None) is not None
+        if not was_active:
+            return  # user-initiated close via remove() — already cleaned up
+        sub.handle._signal_error(reason)
+        if sub.handle._on_error is not None:
             self._dispatcher.dispatch_error(sub.handle._on_error, reason, sub.handle)
 
     def _on_message(
@@ -2049,17 +1990,7 @@ class DMQBackend(Backend):
         if sub.callback is not None:
             self._dispatcher.dispatch_reading(sub.callback, reading, handle)
         else:
-            try:
-                handle._queue.put_nowait(reading)
-            except queue.Full:
-                handle._drop_count += 1
-                now = time.monotonic()
-                if now - handle._last_drop_log >= 5.0:
-                    logger.warning(
-                        f"DMQ subscription queue full ({_DEFAULT_QUEUE_MAXSIZE}), dropped {handle._drop_count} readings"
-                    )
-                    handle._drop_count = 0
-                    handle._last_drop_log = now
+            handle._dispatch(reading)
 
     def _cancel_subscription_async(self, sub: _SelectSubscription) -> None:
         """Schedule subscription cancellation on the IO loop."""
@@ -2096,8 +2027,7 @@ class DMQBackend(Backend):
                 except Exception:
                     pass
 
-            sub.handle._stopped = True
-            sub.handle._wake_queue()
+            sub.handle._signal_stop()
 
         self._select_connection.ioloop.add_callback_threadsafe(do_cancel)
 
@@ -2205,8 +2135,7 @@ class DMQBackend(Backend):
             return
 
         self._cancel_subscription_async(sub)
-        handle._stopped = True
-        handle._wake_queue()
+        handle._signal_stop()
         logger.info(f"Removed subscription sub_id={sub_id[:8]}")
 
     def stop_streaming(self) -> None:
@@ -2221,8 +2150,7 @@ class DMQBackend(Backend):
             self._subscriptions.clear()
 
         for sub in subs:
-            sub.handle._stopped = True
-            sub.handle._wake_queue()
+            sub.handle._signal_stop()
             self._cancel_subscription_async(sub)
 
         # Close the SelectConnection and stop the IO thread
