@@ -30,7 +30,7 @@ import socket
 from pacsys.backends._dispatch import CallbackDispatcher
 from pacsys.backends._subscription import BufferedSubscriptionHandle
 from pacsys.dpm_connection import DPM_HANDSHAKE, MAX_MESSAGE_SIZE, DPMConnection, DPMConnectionError
-from pacsys.errors import AuthenticationError, DeviceError
+from pacsys.errors import AuthenticationError, DeviceError, ReadError
 from pacsys.pool import ConnectionPool
 from pacsys.types import (
     BackendCapability,
@@ -551,72 +551,78 @@ class DPMHTTPBackend(Backend):
 
         pool = self._get_pool()
         conn_broken = False
+        transport_error: Optional[BaseException] = None
 
-        with pool.connection(wait_timeout=effective_timeout) as conn:
-            list_id = conn.list_id
+        try:
+            with pool.connection(wait_timeout=effective_timeout) as conn:
+                list_id = conn.list_id
 
-            # Pipeline: batch all AddToList + StartList into a single TCP send
-            setup_msgs = []
-            for i, drf in enumerate(prepared_drfs):
-                add_req = AddToList_request()
-                add_req.list_id = list_id
-                add_req.ref_id = i + 1
-                add_req.drf_request = drf
-                setup_msgs.append(add_req)
+                # Pipeline: batch all AddToList + StartList into a single TCP send
+                setup_msgs = []
+                for i, drf in enumerate(prepared_drfs):
+                    add_req = AddToList_request()
+                    add_req.list_id = list_id
+                    add_req.ref_id = i + 1
+                    add_req.drf_request = drf
+                    setup_msgs.append(add_req)
 
-            start_req = StartList_request()
-            start_req.list_id = list_id
-            setup_msgs.append(start_req)
-            conn.send_messages_batch(setup_msgs)
+                start_req = StartList_request()
+                start_req.list_id = list_id
+                setup_msgs.append(start_req)
+                conn.send_messages_batch(setup_msgs)
 
-            try:
-                while received_count < expected_count:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        break
-
-                    try:
-                        reply = conn.recv_message(timeout=min(remaining, 2.0))
-                    except TimeoutError:
-                        if time.monotonic() >= deadline:
+                try:
+                    while received_count < expected_count:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
                             break
-                        continue
 
-                    if isinstance(reply, AddToList_reply):
-                        if reply.status != 0:
-                            add_errors[reply.ref_id] = reply
-                            received_count += 1
-                    elif isinstance(reply, DeviceInfo_reply):
-                        device_infos[reply.ref_id] = reply
-                    elif isinstance(reply, StartList_reply):
-                        if reply.status != 0:
-                            logger.warning(f"StartList returned status {reply.status}")
-                            break  # No data will arrive
-                    elif isinstance(reply, ListStatus_reply):
-                        pass
-                    elif isinstance(reply, Status_reply):
-                        if reply.ref_id not in data_replies:
-                            data_replies[reply.ref_id] = reply
-                            received_count += 1
-                    elif hasattr(reply, "ref_id"):
-                        if reply.ref_id not in data_replies:
-                            data_replies[reply.ref_id] = reply
-                            received_count += 1
-            except (BrokenPipeError, ConnectionResetError, OSError):
-                conn_broken = True
-                raise
-            finally:
-                if not conn_broken:
-                    try:
-                        stop_req = StopList_request()
-                        stop_req.list_id = list_id
-                        clear_req = ClearList_request()
-                        clear_req.list_id = list_id
-                        conn.send_messages_batch([stop_req, clear_req])
-                    except Exception:
-                        conn.close()  # Force-close; pool.release() detects dead conn
+                        try:
+                            reply = conn.recv_message(timeout=min(remaining, 2.0))
+                        except TimeoutError:
+                            if time.monotonic() >= deadline:
+                                break
+                            continue
+
+                        if isinstance(reply, AddToList_reply):
+                            if reply.status != 0:
+                                add_errors[reply.ref_id] = reply
+                                received_count += 1
+                        elif isinstance(reply, DeviceInfo_reply):
+                            device_infos[reply.ref_id] = reply
+                        elif isinstance(reply, StartList_reply):
+                            if reply.status != 0:
+                                logger.warning(f"StartList returned status {reply.status}")
+                                break  # No data will arrive
+                        elif isinstance(reply, ListStatus_reply):
+                            pass
+                        elif isinstance(reply, Status_reply):
+                            if reply.ref_id not in data_replies:
+                                data_replies[reply.ref_id] = reply
+                                received_count += 1
+                        elif hasattr(reply, "ref_id"):
+                            if reply.ref_id not in data_replies:
+                                data_replies[reply.ref_id] = reply
+                                received_count += 1
+                except (BrokenPipeError, ConnectionResetError, OSError) as e:
+                    conn_broken = True
+                    transport_error = e
+                finally:
+                    if not conn_broken:
+                        try:
+                            stop_req = StopList_request()
+                            stop_req.list_id = list_id
+                            clear_req = ClearList_request()
+                            clear_req.list_id = list_id
+                            conn.send_messages_batch([stop_req, clear_req])
+                        except Exception:
+                            conn.close()  # Force-close; pool.release() detects dead conn
+        except (BrokenPipeError, ConnectionResetError, OSError) as e:
+            # Re-raised from inner except — capture but don't propagate raw
+            transport_error = e
 
         readings: list[Reading] = []
+        has_timeout = False
 
         for i, original_drf in enumerate(drfs):
             ref_id = i + 1
@@ -627,7 +633,7 @@ class DPMHTTPBackend(Backend):
             meta = _device_info_to_meta(info) if info else None
 
             if add_err is not None:
-                # AddToList failed for this device (bad DRF, etc.)
+                # AddToList failed for this device (server-side error, not transport)
                 facility, error = parse_error(add_err.status)
                 readings.append(
                     Reading(
@@ -643,14 +649,17 @@ class DPMHTTPBackend(Backend):
                     )
                 )
             elif reply is None:
+                has_timeout = True
+                ec = ERR_RETRY if transport_error is not None else ERR_TIMEOUT
+                msg = f"Connection error: {transport_error}" if transport_error is not None else "Request timeout"
                 readings.append(
                     Reading(
                         drf=original_drf,
                         value_type=ValueType.SCALAR,
                         facility_code=FACILITY_ACNET,
-                        error_code=ERR_TIMEOUT,
+                        error_code=ec,
                         value=None,
-                        message="Request timeout",
+                        message=msg,
                         timestamp=None,
                         cycle=0,
                         meta=meta,
@@ -658,6 +667,9 @@ class DPMHTTPBackend(Backend):
                 )
             else:
                 readings.append(self._reply_to_reading(reply, original_drf, meta))
+
+        if transport_error is not None or has_timeout:
+            raise ReadError(readings, str(transport_error or "Request timeout")) from transport_error
 
         return readings
 

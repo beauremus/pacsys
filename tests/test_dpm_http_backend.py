@@ -22,7 +22,7 @@ import pytest
 from pacsys.backends import timestamp_from_millis
 from pacsys.backends.dpm_http import DPMHTTPBackend
 from pacsys.types import Reading, ValueType
-from pacsys.errors import DeviceError, AuthenticationError
+from pacsys.errors import DeviceError, AuthenticationError, ReadError
 from pacsys.acnet.errors import make_error
 from pacsys.dpm_protocol import ListStatus_reply, Raw_reply, StartList_reply
 
@@ -727,7 +727,7 @@ class TestStartListFailureAbort:
     """Tests that failed StartList aborts get_many instead of waiting."""
 
     def test_start_list_failure_returns_timeout_readings(self):
-        """Failed StartList should not block -- return timeout readings promptly."""
+        """Failed StartList should not block -- raise ReadError promptly."""
         replies = [
             make_add_to_list_reply(ref_id=1, status=0),
             make_device_info(name="M:OUTTMP", ref_id=1),
@@ -741,11 +741,13 @@ class TestStartListFailureAbort:
                 import time
 
                 start = time.monotonic()
-                readings = backend.get_many(["M:OUTTMP"], timeout=5.0)
+                with pytest.raises(ReadError) as exc_info:
+                    backend.get_many(["M:OUTTMP"], timeout=5.0)
                 elapsed = time.monotonic() - start
+                readings = exc_info.value.readings
                 assert len(readings) == 1
                 assert readings[0].is_error
-                # Should return quickly, not wait for the full 5s timeout
+                # Should raise quickly, not wait for the full 5s timeout
                 assert elapsed < 2.0
             finally:
                 backend.close()

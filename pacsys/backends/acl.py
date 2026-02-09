@@ -28,7 +28,7 @@ from pacsys.drf3 import parse_request
 from pacsys.drf3.event import DefaultEvent
 from pacsys.drf3.field import DRF_FIELD
 from pacsys.drf3.property import DRF_PROPERTY
-from pacsys.errors import DeviceError
+from pacsys.errors import DeviceError, ReadError
 from pacsys.types import (
     BackendCapability,
     Reading,
@@ -482,7 +482,7 @@ class ACLBackend(Backend):
         except DeviceError as e:
             if e.error_code == ERR_TIMEOUT:
                 # Server is unresponsive — individual reads would each timeout too.
-                return [
+                readings = [
                     Reading(
                         drf=drf,
                         value_type=ValueType.SCALAR,
@@ -493,6 +493,7 @@ class ACLBackend(Backend):
                     )
                     for drf in drfs
                 ]
+                raise ReadError(readings, e.message or "ACL request timeout") from e
             # HTTP/URL error (e.g. 400 from one bad DRF) — fall back to
             # individual reads to isolate which devices actually failed.
             logger.debug("ACL batch HTTP error, falling back to individual reads: %s", e.message)

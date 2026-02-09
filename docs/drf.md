@@ -4,25 +4,25 @@ DRF (Data Request Format) is the standard way to address data in the Fermilab co
 
 ## Using the DRF Parser
 
-The `DataRequest` class parses any DRF string and provides access to its components:
+The `parse_request()` function parses any DRF string into a `DataRequest` object with access to its components:
 
 ```python
-from pacsys.drf3 import DataRequest
+from pacsys.drf3 import parse_request
 
 # Parse a DRF string
-req = DataRequest("M:OUTTMP.READING[0:10]@p,1000")
+req = parse_request("M:OUTTMP.READING[0:10]@p,1000")
 
 # Access components
 req.device          # "M:OUTTMP"
-req.property        # Property.READING
-req.range           # ArrayRange(start=0, end=10)
+req.property        # DRF_PROPERTY.READING
+req.range           # ARRAY_RANGE [0:10]
 req.event           # PeriodicEvent(period=1000, ...)
 
 # Get canonical (normalized) form
-req.canonical       # "M:OUTTMP.READING[0:10]@p,1000" - we follow Java here instead of writing 1S
+req.to_canonical()  # "M:OUTTMP.READING[0:10]@p,1000" - we follow Java here instead of writing 1S
 
 # Validation happens at parse time
-DataRequest("INVALID!")  # raises ParseError
+parse_request("INVALID!")  # raises ValueError
 ```
 
 The parser accepts any valid DRF2/DRF3 syntax including property aliases, qualifier shortcuts, and various event formats.
@@ -56,10 +56,10 @@ The parser normalizes DRF strings for consistent comparison:
 | Case: device preserved, rest uppercase | `m:outtmp.read` → `m:OUTTMP.READING` |
 
 ```python
-from pacsys.drf3 import DataRequest
+from pacsys.drf3 import parse_request
 
-req = DataRequest("m:outtmp.read@p,1000")
-print(req.canonical)  # "m:OUTTMP.READING@p,1000"
+req = parse_request("m:outtmp.read@p,1000")
+print(req.to_canonical())  # "m:OUTTMP.READING@p,1000"
 ```
 
 ---

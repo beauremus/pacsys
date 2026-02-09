@@ -9,7 +9,7 @@ High level features:
 - **Read/Stream** device values (regular and Fast Time Plot)
 - **Write** settings (with proper authorization)
 - **Full data type support** - alarm, status, etc.
-- **Notebook-friendly sync API and a script-oriented async API**
+- **Notebook-friendly sync API** (async internals, sync public interface)
 
 Low level features:
 

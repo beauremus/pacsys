@@ -559,9 +559,23 @@ class Device:
         new_drf = self._request.to_canonical(event=new_event)
         return self.__class__(new_drf, self._backend)
 
-    def with_range(self, start: int, end: int | None = None) -> Device:
-        """Return new Device with array range."""
-        new_range = ARRAY_RANGE(mode="std", low=start, high=end)
+    def with_range(self, start: int | None = None, end: int | None = None, *, at: int | None = None) -> Device:
+        """Return new Device with array range.
+
+        Args:
+            start: Range start index (produces [start:end] or [start:]).
+            end: Range end index (inclusive). If None, range extends to end of array.
+            at: Single element index (produces [at]). Mutually exclusive with start/end.
+            No arguments produces full array range [:].
+        """
+        if at is not None:
+            if start is not None or end is not None:
+                raise ValueError("'at' cannot be combined with 'start'/'end'")
+            new_range = ARRAY_RANGE(mode="single", low=at)
+        elif start is not None:
+            new_range = ARRAY_RANGE(mode="std", low=start, high=end)
+        else:
+            new_range = ARRAY_RANGE(mode="full")
         new_drf = self._request.to_canonical(range=new_range)
         return self.__class__(new_drf, self._backend)
 

@@ -54,6 +54,11 @@ Create explicit backend instances for more control.
       show_root_heading: true
       heading_level: 3
 
+::: pacsys.dmq
+    options:
+      show_root_heading: true
+      heading_level: 3
+
 ::: pacsys.acl
     options:
       show_root_heading: true

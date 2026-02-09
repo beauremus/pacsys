@@ -21,7 +21,7 @@ from pacsys.acnet.errors import ERR_RETRY, ERR_TIMEOUT, FACILITY_ACNET, normaliz
 from pacsys.auth import Auth, JWTAuth
 from pacsys.backends import Backend, validate_alarm_dict
 from pacsys.drf_utils import prepare_for_write
-from pacsys.errors import AuthenticationError, DeviceError
+from pacsys.errors import AuthenticationError, DeviceError, ReadError
 from pacsys.backends._dispatch import CallbackDispatcher
 from pacsys.backends._subscription import BufferedSubscriptionHandle
 from pacsys.types import (
@@ -308,6 +308,32 @@ def _aggregate_timed_readings(readings: list[Reading]) -> Reading:
     )
 
 
+def _aggregate_proto_readings(reading_list, drf: str, now: datetime) -> Reading:
+    """Aggregate proto readings directly into a TIMED_SCALAR_ARRAY.
+
+    Skips intermediate Reading objects — extracts values and timestamps
+    straight from the proto messages to avoid N datetime round-trips
+    and N throwaway allocations.
+    """
+    data = np.array([_proto_value_to_python(rd.data)[0] for rd in reading_list], dtype=float)
+    micros = np.array(
+        [
+            rd.timestamp.seconds * 1_000_000 + rd.timestamp.nanos // 1_000
+            if rd.timestamp.seconds or rd.timestamp.nanos
+            else 0
+            for rd in reading_list
+        ],
+        dtype=np.int64,
+    )
+    ts = _proto_timestamp_to_datetime(reading_list[0].timestamp) or now
+    return Reading(
+        drf=drf,
+        value_type=ValueType.TIMED_SCALAR_ARRAY,
+        value={"data": data, "micros": micros},
+        timestamp=ts,
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Async Core -- all gRPC I/O lives here
 # ─────────────────────────────────────────────────────────────────────────────
@@ -360,6 +386,7 @@ class _DaqCore:
         received_count = 0
         expected_count = len(drfs)
         now = datetime.now()
+        transport_error: Optional[BaseException] = None
 
         call = None
         try:
@@ -381,19 +408,22 @@ class _DaqCore:
                 if index < 0 or index >= len(drfs) or results[index] is not None:
                     continue
 
-                readings = _reply_to_readings(reply, drfs)
-                if readings:
-                    if len(readings) > 1:
-                        results[index] = _aggregate_timed_readings(readings)
-                    else:
-                        results[index] = readings[0]
+                value_field = reply.WhichOneof("value")
+                if value_field == "readings" and len(reply.readings.reading) > 1:
+                    results[index] = _aggregate_proto_readings(reply.readings.reading, drfs[index], now)
                     received_count += 1
+                else:
+                    readings = _reply_to_readings(reply, drfs)
+                    if readings:
+                        results[index] = readings[0]
+                        received_count += 1
 
                 if received_count >= expected_count:
                     call.cancel()
                     break
 
         except grpc.aio.AioRpcError as e:
+            transport_error = e
             target = f"{self._host}:{self._port}"
             error_message = f"gRPC error ({target}): {e.code().name}: {e.details()}"
             missing = [drfs[i] for i in range(len(drfs)) if results[i] is None]
@@ -412,6 +442,7 @@ class _DaqCore:
                     )
 
         except Exception as e:
+            transport_error = e
             target = f"{self._host}:{self._port}"
             error_message = f"gRPC error ({target}): {type(e).__name__}: {e}"
             logger.error(error_message)
@@ -425,9 +456,11 @@ class _DaqCore:
                         timestamp=now,
                     )
 
-        # Backfill missing
+        # Backfill missing (stream ended without responses for some devices)
+        has_missing = False
         for i in range(len(drfs)):
             if results[i] is None:
+                has_missing = True
                 results[i] = Reading(
                     drf=drfs[i],
                     value_type=ValueType.SCALAR,
@@ -435,6 +468,9 @@ class _DaqCore:
                     message="No response received",
                     timestamp=now,
                 )
+
+        if transport_error is not None or has_missing:
+            raise ReadError(results, str(transport_error or "Incomplete response")) from transport_error  # type: ignore[arg-type]
 
         return results  # type: ignore
 

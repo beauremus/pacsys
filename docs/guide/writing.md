@@ -237,20 +237,19 @@ See [Alarm Helpers](../specialized-utils/alarms.md) for the full API.
 
 ---
 
-## Write Verification (gRPC only)
+## Write Verification (Device API)
 
-The gRPC backend supports read-back verification:
+Write verification is available via the [Device API](device-api.md#write-verification) and works with **all** backends:
 
 ```python
-with pacsys.grpc(auth=auth) as backend:
-    result = backend.write(
-        "Z:ACLTST", 45.0,
-        verify=True,       # Read back after write
-        tolerance=0.1,     # Accept within 0.1 of target
-    )
+from pacsys import Device, Verify
+
+dev = Device("Z:ACLTST", backend=backend)
+result = dev.write(45.0, verify=Verify(tolerance=0.1))
+print(result.verified)  # True if readback matched
 ```
 
-DPM/HTTP raises `NotImplementedError` for `verify=True`.
+Note: verification is a `Device.write()` feature, not a backend `write()` feature. Backend `write()` methods do not accept `verify` or `tolerance` parameters.
 
 ---
 
@@ -299,7 +298,7 @@ print(f"Failed: {results[1].error_code}")
 |---------|----------|----------|-----|
 | Auth type | Kerberos + role | JWT | Kerberos (no role) |
 | Alarm dict write | Yes (sequential) | No | No |
-| Verify | Not implemented | Yes | Not implemented |
+| Verify | Via Device API | Via Device API | Via Device API |
 | Batch write | `write_many()` | `write_many()` | `write_many()` |
 
 ---

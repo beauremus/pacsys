@@ -38,8 +38,8 @@ from pacsys import JWTAuth
 with pacsys.grpc() as backend:
     value = backend.read("M:OUTTMP")
 
-# With JWT authentication - automatic authentication is NOT yet implemented/available
-auth = JWTAuth(token="eyJ...")  # Or set PACSYS_JWT_TOKEN env var
+# With explicit JWT authentication (or set PACSYS_JWT_TOKEN env var for automatic auth)
+auth = JWTAuth(token="eyJ...")
 with pacsys.grpc(auth=auth) as backend:
     result = backend.write("M:OUTTMP", 72.5)
 ```

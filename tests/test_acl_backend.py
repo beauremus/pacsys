@@ -25,7 +25,7 @@ from pacsys.backends.acl import (
     _parse_raw_hex,
     _is_error_response,
 )
-from pacsys.errors import DeviceError
+from pacsys.errors import DeviceError, ReadError
 from pacsys.types import Reading, ValueType
 from tests.conftest import MockACLResponse
 
@@ -422,8 +422,10 @@ class TestHTTPErrors:
             mock_get.side_effect = httpx.ReadTimeout("timed out")
             backend = ACLBackend()
             try:
-                with pytest.raises(DeviceError, match="timed out"):
+                with pytest.raises(ReadError) as exc_info:
                     backend.read("M:OUTTMP")
+                assert "timed out" in str(exc_info.value)
+                assert isinstance(exc_info.value.__cause__, DeviceError)
             finally:
                 backend.close()
 

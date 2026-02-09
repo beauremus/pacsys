@@ -230,7 +230,9 @@ immediate = dev.with_event("I")         # M:OUTTMP.READING@I
 ```python
 dev = Device("B:IRMS06")
 sliced = dev.with_range(0, 10)          # B:IRMS06.READING[0:10]
-single = dev.with_range(5)              # B:IRMS06.READING[5]
+from_5 = dev.with_range(start=5)        # B:IRMS06.READING[5:]
+single = dev.with_range(at=5)           # B:IRMS06.READING[5]
+full   = dev.with_range()               # B:IRMS06.READING[:]
 ```
 
 ### Bind to Backend

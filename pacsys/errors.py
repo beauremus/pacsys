@@ -5,7 +5,36 @@ These exceptions are raised by the user-facing API (read, get, write, etc.)
 rather than the low-level ACNET protocol layer.
 """
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from pacsys.types import Reading
+
+
+class ReadError(Exception):
+    """Transport failure during a batch read.
+
+    Raised when get_many() encounters a client-side transport error
+    (timeout, connection drop, auth failure) — NOT for server-side ACNET
+    errors like DIO_NOATT which are returned as error Readings.
+
+    Attributes:
+        readings: Complete results list (same length as input drfs).
+            Includes both successful readings and error-backfilled entries.
+        message: Human-readable description of the transport failure.
+
+    The underlying network exception is chained via ``__cause__``
+    (standard ``raise ReadError(...) from cause`` pattern).
+    """
+
+    def __init__(self, readings: "list[Reading]", message: str):
+        self.readings = readings
+        super().__init__(message)
+
+    def __repr__(self) -> str:
+        ok = sum(1 for r in self.readings if r.ok)
+        total = len(self.readings)
+        return f"ReadError({ok}/{total} ok, {self.args[0]!r})"
 
 
 class DeviceError(Exception):

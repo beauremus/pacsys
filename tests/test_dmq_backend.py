@@ -28,7 +28,7 @@ from pacsys.backends.dmq import (
     _reply_to_reading,
 )
 from pacsys.drf_utils import prepare_for_write
-from pacsys.errors import AuthenticationError, DeviceError
+from pacsys.errors import AuthenticationError, DeviceError, ReadError
 from pacsys.backends.dmq_protocol import (
     AnalogAlarmSample_reply,
     BasicControlSample_reply,
@@ -542,15 +542,18 @@ class TestDMQBackendRead:
             assert reading.error_code == ERROR_NOT_FOUND
 
     def test_read_timeout(self):
-        """Test that timeout returns error reading."""
+        """Test that timeout raises ReadError."""
         with _mock_dmq_backend([], timeout=0.5) as backend:
-            reading = backend.get(TEMP_DEVICE, timeout=0.5)
-            assert reading.is_error
-            assert reading.error_code == -6  # ACNET_REQTMO
-            assert "timeout" in reading.message.lower()
+            with pytest.raises(ReadError) as exc_info:
+                backend.get(TEMP_DEVICE, timeout=0.5)
+            readings = exc_info.value.readings
+            assert len(readings) == 1
+            assert readings[0].is_error
+            assert readings[0].error_code == -6  # ACNET_REQTMO
+            assert "timeout" in readings[0].message.lower()
 
     def test_read_gss_failure_reports_auth_error(self):
-        """Test that GSS auth failure during read returns ERR_RETRY, not ERR_TIMEOUT.
+        """Test that GSS auth failure during read raises ReadError with ERR_RETRY.
 
         Regression: previously, GSS errors were masked as ERR_TIMEOUT because
         on_gss_error just called _complete_read without storing the error.
@@ -567,11 +570,14 @@ class TestDMQBackendRead:
         ):
             backend = DMQBackend(host="localhost", auth=_create_mock_auth())
             try:
-                reading = backend.get(TEMP_DEVICE, timeout=2.0)
+                with pytest.raises(ReadError) as exc_info:
+                    backend.get(TEMP_DEVICE, timeout=2.0)
+                reading = exc_info.value.readings[0]
                 assert reading.is_error
                 assert reading.error_code == -1, f"Expected ERR_RETRY (-1) for auth failure, got {reading.error_code}"
                 assert "Authentication failed" in reading.message
                 assert "Kerberos ticket expired" in reading.message
+                assert isinstance(exc_info.value.__cause__, AuthenticationError)
             finally:
                 backend.close()
 

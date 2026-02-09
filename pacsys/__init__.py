@@ -33,7 +33,7 @@ from pacsys.types import (
     ReadingCallback,
     ErrorCallback,
 )
-from pacsys.errors import DeviceError, AuthenticationError, ACLError
+from pacsys.errors import DeviceError, AuthenticationError, ACLError, ReadError
 from pacsys.device import Device, ScalarDevice, ArrayDevice, TextDevice
 from pacsys.types import BasicControl  # noqa: F401
 from pacsys.alarm_block import (
@@ -71,6 +71,7 @@ from pacsys.devdb import (  # noqa: F401
 )
 
 if TYPE_CHECKING:
+    from pacsys.backends import Backend
     from pacsys.backends.dpm_http import DPMHTTPBackend
     from pacsys.backends.grpc_backend import GRPCBackend
     from pacsys.backends.acl import ACLBackend
@@ -125,13 +126,19 @@ _env_devdb_port = _get_env_int("PACSYS_DEVDB_PORT")
 # Thread-safe lock for global backend initialization
 _global_lock = threading.Lock()
 
-# Global lazy-initialized DPM backend (None until first use)
-_global_dpm_backend: Optional["DPMHTTPBackend"] = None
+# Global lazy-initialized backend (None until first use)
+_global_backend: Optional["Backend"] = None
 
 # Flag to track if backend has been initialized
 _backend_initialized = False
 
+# Valid backend type names
+_VALID_BACKENDS = {"dpm", "grpc", "dmq", "acl"}
+
 # User-configured settings (set via configure())
+_config_backend: Optional[str] = None
+_config_auth: Optional[Auth] = None
+_config_role: Optional[str] = None
 _config_dpm_host: Optional[str] = None
 _config_dpm_port: Optional[int] = None
 _config_pool_size: Optional[int] = None
@@ -177,6 +184,9 @@ def configure(
     default_timeout: Optional[float] = None,
     devdb_host: Optional[str] = None,
     devdb_port: Optional[int] = None,
+    backend: Optional[str] = None,
+    auth: Optional[Auth] = None,
+    role: Optional[str] = None,
 ) -> None:
     """Configure pacsys global settings.
 
@@ -189,12 +199,17 @@ def configure(
         default_timeout: Default operation timeout in seconds (default: from PACSYS_TIMEOUT or 5.0)
         devdb_host: DevDB gRPC hostname (default: from PACSYS_DEVDB_HOST or localhost)
         devdb_port: DevDB gRPC port (default: from PACSYS_DEVDB_PORT or 6802)
+        backend: Backend type — one of "dpm", "grpc", "dmq", "acl" (default: "dpm")
+        auth: Authentication object (KerberosAuth or JWTAuth) for writes
+        role: Role for authenticated operations (e.g., "testing")
 
     Raises:
         RuntimeError: If called after any backend is initialized
+        ValueError: If backend is not a valid backend type
     """
     global _config_dpm_host, _config_dpm_port, _config_pool_size, _config_timeout
     global _config_devdb_host, _config_devdb_port
+    global _config_backend, _config_auth, _config_role
 
     with _global_lock:
         if _backend_initialized or _devdb_initialized:
@@ -203,6 +218,14 @@ def configure(
                 "Call shutdown() first to close the backend, then configure() to change settings."
             )
 
+        if backend is not None:
+            if backend not in _VALID_BACKENDS:
+                raise ValueError(f"Invalid backend {backend!r}, must be one of {sorted(_VALID_BACKENDS)}")
+            _config_backend = backend
+        if auth is not None:
+            _config_auth = auth
+        if role is not None:
+            _config_role = role
         if dpm_host is not None:
             _config_dpm_host = dpm_host
         if dpm_port is not None:
@@ -230,13 +253,13 @@ def shutdown() -> None:
 
     Safe to call multiple times or when no backend is initialized.
     """
-    global _global_dpm_backend, _backend_initialized
+    global _global_backend, _backend_initialized
     global _global_devdb, _devdb_initialized
 
     with _global_lock:
-        if _global_dpm_backend is not None:
-            _global_dpm_backend.close()
-            _global_dpm_backend = None
+        if _global_backend is not None:
+            _global_backend.close()
+            _global_backend = None
 
         if _global_devdb is not None:
             _global_devdb.close()
@@ -246,60 +269,91 @@ def shutdown() -> None:
         _devdb_initialized = False
 
 
-def _get_global_backend() -> "DPMHTTPBackend":
-    """Get or create the global DPM backend (lazy initialization).
+def _get_global_backend() -> "Backend":
+    """Get or create the global backend (lazy initialization).
 
-    This is the internal function used by Device to get the global backend.
+    Dispatches to the backend type set via configure(backend=...).
+    Defaults to DPM HTTP if no backend type is configured.
 
     Returns:
-        DPMHTTPBackend instance
+        Backend instance
 
     Thread Safety:
         Thread-safe - uses lock for initialization.
     """
-    global _global_dpm_backend, _backend_initialized
+    global _global_backend, _backend_initialized
 
     # Fast path: already initialized
-    if _global_dpm_backend is not None:
-        return _global_dpm_backend
+    if _global_backend is not None:
+        return _global_backend
 
     with _global_lock:
         # Double-check under lock
-        if _global_dpm_backend is not None:
-            return _global_dpm_backend
+        if _global_backend is not None:
+            return _global_backend
 
-        # Import here to avoid circular imports
-        from pacsys.backends.dpm_http import DPMHTTPBackend
-
-        # Determine effective settings (priority: configure() > env > defaults)
-        host = (
-            _config_dpm_host
-            if _config_dpm_host is not None
-            else (_env_dpm_host if _env_dpm_host is not None else "acsys-proxy.fnal.gov")
-        )
-        port = (
-            _config_dpm_port if _config_dpm_port is not None else (_env_dpm_port if _env_dpm_port is not None else 6802)
-        )
-        pool_size = (
-            _config_pool_size
-            if _config_pool_size is not None
-            else (_env_pool_size if _env_pool_size is not None else 4)
-        )
         timeout = (
             _config_timeout if _config_timeout is not None else (_env_timeout if _env_timeout is not None else 5.0)
         )
+        backend_type = _config_backend or "dpm"
 
-        _global_dpm_backend = _track(
-            DPMHTTPBackend(
-                host=host,
-                port=port,
-                pool_size=pool_size,
-                timeout=timeout,
-            )
-        )
+        if backend_type == "dpm":
+            _global_backend = _create_global_dpm(timeout)
+        elif backend_type == "grpc":
+            _global_backend = _create_global_grpc(timeout)
+        elif backend_type == "dmq":
+            _global_backend = _create_global_dmq(timeout)
+        elif backend_type == "acl":
+            _global_backend = _create_global_acl(timeout)
+        else:
+            raise ValueError(f"Unknown backend type {backend_type!r}")
+
         _backend_initialized = True
+        return _global_backend
 
-        return _global_dpm_backend
+
+def _create_global_dpm(timeout: float) -> "DPMHTTPBackend":
+    from pacsys.backends.dpm_http import DPMHTTPBackend
+
+    host = (
+        _config_dpm_host
+        if _config_dpm_host is not None
+        else (_env_dpm_host if _env_dpm_host is not None else "acsys-proxy.fnal.gov")
+    )
+    port = _config_dpm_port if _config_dpm_port is not None else (_env_dpm_port if _env_dpm_port is not None else 6802)
+    pool_size = (
+        _config_pool_size if _config_pool_size is not None else (_env_pool_size if _env_pool_size is not None else 4)
+    )
+    kwargs: dict = dict(host=host, port=port, pool_size=pool_size, timeout=timeout)
+    if _config_auth is not None:
+        kwargs["auth"] = _config_auth
+    if _config_role is not None:
+        kwargs["role"] = _config_role
+    return _track(DPMHTTPBackend(**kwargs))
+
+
+def _create_global_grpc(timeout: float) -> "GRPCBackend":
+    from pacsys.backends.grpc_backend import GRPCBackend
+
+    kwargs: dict = dict(timeout=timeout)
+    if _config_auth is not None:
+        kwargs["auth"] = _config_auth
+    return _track(GRPCBackend(**kwargs))
+
+
+def _create_global_dmq(timeout: float) -> "DMQBackend":
+    from pacsys.backends.dmq import DMQBackend
+
+    kwargs: dict = dict(timeout=timeout)
+    if _config_auth is not None:
+        kwargs["auth"] = _config_auth
+    return _track(DMQBackend(**kwargs))
+
+
+def _create_global_acl(timeout: float) -> "ACLBackend":
+    from pacsys.backends.acl import ACLBackend
+
+    return _track(ACLBackend(timeout=timeout))
 
 
 def _get_global_devdb() -> Optional["DevDBClient"]:
@@ -431,11 +485,10 @@ def get_many(
 
     Returns:
         List of Reading objects in same order as input.
-        Timed-out devices return Reading with is_error=True and
-        message="Request timeout". Valid readings received before
-        timeout are preserved.
 
     Raises:
+        ReadError: On transport failure (timeout, connection drop).
+            Partial results are available via ``exc.readings``.
         ValueError: If any DRF syntax is invalid (before network I/O)
 
     Thread Safety:
@@ -849,6 +902,7 @@ __all__ = [
     "DeviceError",
     "AuthenticationError",
     "ACLError",
+    "ReadError",
     # Device classes
     "Device",
     "ScalarDevice",

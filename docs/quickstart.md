@@ -99,7 +99,8 @@ pacsys automatically converts READING to SETTING and STATUS to CONTROL when writ
 value = pacsys.read("M:OUTTMP")
 
 # Explicit backend
-with pacsys.dmq() as backend:
+from pacsys import KerberosAuth
+with pacsys.dmq(auth=KerberosAuth()) as backend:
     value = backend.read("M:OUTTMP")
 ```
 

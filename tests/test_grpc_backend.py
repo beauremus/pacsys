@@ -25,7 +25,7 @@ from unittest import mock
 import pytest
 
 from pacsys.auth import JWTAuth
-from pacsys.errors import AuthenticationError, DeviceError
+from pacsys.errors import AuthenticationError, DeviceError, ReadError
 from pacsys.types import Reading, ValueType, WriteResult
 from tests.devices import make_jwt_token
 
@@ -491,18 +491,22 @@ class TestGRPCErrors:
         backend, mock_stub = backend_with_mock_stub
         mock_stub.Read.return_value = AsyncErrorIterator(grpc.StatusCode.UNAVAILABLE, "Connection refused")
 
-        with pytest.raises(DeviceError) as exc_info:
+        with pytest.raises(ReadError) as exc_info:
             backend.read("M:OUTTMP")
-        assert "UNAVAILABLE" in exc_info.value.message
+        assert "UNAVAILABLE" in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, grpc.aio.AioRpcError)
 
     def test_grpc_error_on_get_many(self, backend_with_mock_stub):
         backend, mock_stub = backend_with_mock_stub
         mock_stub.Read.return_value = AsyncErrorIterator(grpc.StatusCode.DEADLINE_EXCEEDED, "Timeout")
 
-        readings = backend.get_many(["M:OUTTMP", "G:AMANDA"])
+        with pytest.raises(ReadError) as exc_info:
+            backend.get_many(["M:OUTTMP", "G:AMANDA"])
+        readings = exc_info.value.readings
         assert len(readings) == 2
         assert all(r.is_error for r in readings)
         assert all("DEADLINE_EXCEEDED" in r.message for r in readings)
+        assert isinstance(exc_info.value.__cause__, grpc.aio.AioRpcError)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

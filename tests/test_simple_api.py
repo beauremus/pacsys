@@ -37,12 +37,18 @@ from pacsys.backends.dpm_http import DPMHTTPBackend
 def reset_global_state():
     """Reset global state before and after each test."""
     pacsys.shutdown()
+    pacsys._config_backend = None
+    pacsys._config_auth = None
+    pacsys._config_role = None
     pacsys._config_dpm_host = None
     pacsys._config_dpm_port = None
     pacsys._config_pool_size = None
     pacsys._config_timeout = None
     yield
     pacsys.shutdown()
+    pacsys._config_backend = None
+    pacsys._config_auth = None
+    pacsys._config_role = None
     pacsys._config_dpm_host = None
     pacsys._config_dpm_port = None
     pacsys._config_pool_size = None
@@ -105,7 +111,7 @@ class TestRead:
         """read() accepts DRF string."""
         mock_backend.read.return_value = 72.5
 
-        with mock.patch.object(pacsys, "_global_dpm_backend", mock_backend):
+        with mock.patch.object(pacsys, "_global_backend", mock_backend):
             with mock.patch.object(pacsys, "_backend_initialized", True):
                 result = pacsys.read("M:OUTTMP")
 
@@ -117,7 +123,7 @@ class TestRead:
         mock_backend.read.return_value = 72.5
         device = Device("M:OUTTMP")
 
-        with mock.patch.object(pacsys, "_global_dpm_backend", mock_backend):
+        with mock.patch.object(pacsys, "_global_backend", mock_backend):
             with mock.patch.object(pacsys, "_backend_initialized", True):
                 result = pacsys.read(device)
 
@@ -129,7 +135,7 @@ class TestRead:
         """read() passes timeout to backend."""
         mock_backend.read.return_value = 72.5
 
-        with mock.patch.object(pacsys, "_global_dpm_backend", mock_backend):
+        with mock.patch.object(pacsys, "_global_backend", mock_backend):
             with mock.patch.object(pacsys, "_backend_initialized", True):
                 pacsys.read("M:OUTTMP", timeout=5.0)
 
@@ -144,7 +150,7 @@ class TestRead:
             message="Device not found",
         )
 
-        with mock.patch.object(pacsys, "_global_dpm_backend", mock_backend):
+        with mock.patch.object(pacsys, "_global_backend", mock_backend):
             with mock.patch.object(pacsys, "_backend_initialized", True):
                 with pytest.raises(DeviceError) as exc_info:
                     pacsys.read("M:BADDEV")
@@ -154,7 +160,7 @@ class TestRead:
 
     def test_read_with_invalid_device_type(self, mock_backend):
         """read() raises TypeError for invalid device type."""
-        with mock.patch.object(pacsys, "_global_dpm_backend", mock_backend):
+        with mock.patch.object(pacsys, "_global_backend", mock_backend):
             with mock.patch.object(pacsys, "_backend_initialized", True):
                 with pytest.raises(TypeError) as exc_info:
                     pacsys.read(12345)  # Not a str or Device
@@ -174,7 +180,7 @@ class TestGet:
         """get() returns Reading object."""
         mock_backend.get.return_value = sample_reading
 
-        with mock.patch.object(pacsys, "_global_dpm_backend", mock_backend):
+        with mock.patch.object(pacsys, "_global_backend", mock_backend):
             with mock.patch.object(pacsys, "_backend_initialized", True):
                 result = pacsys.get("M:OUTTMP")
 
@@ -188,7 +194,7 @@ class TestGet:
         mock_backend.get.return_value = sample_reading
         device = ScalarDevice("M:OUTTMP")
 
-        with mock.patch.object(pacsys, "_global_dpm_backend", mock_backend):
+        with mock.patch.object(pacsys, "_global_backend", mock_backend):
             with mock.patch.object(pacsys, "_backend_initialized", True):
                 result = pacsys.get(device)
 
@@ -198,7 +204,7 @@ class TestGet:
         """get() returns error Reading without raising."""
         mock_backend.get.return_value = error_reading
 
-        with mock.patch.object(pacsys, "_global_dpm_backend", mock_backend):
+        with mock.patch.object(pacsys, "_global_backend", mock_backend):
             with mock.patch.object(pacsys, "_backend_initialized", True):
                 result = pacsys.get("M:BADDEV")
 
@@ -219,7 +225,7 @@ class TestGetMany:
         """get_many() accepts list of DRF strings."""
         mock_backend.get_many.return_value = [sample_reading, error_reading]
 
-        with mock.patch.object(pacsys, "_global_dpm_backend", mock_backend):
+        with mock.patch.object(pacsys, "_global_backend", mock_backend):
             with mock.patch.object(pacsys, "_backend_initialized", True):
                 results = pacsys.get_many(["M:OUTTMP", "M:BADDEV"])
 
@@ -233,7 +239,7 @@ class TestGetMany:
         device = Device("G:AMANDA")
         scalar = ScalarDevice("B:VIMIN")
 
-        with mock.patch.object(pacsys, "_global_dpm_backend", mock_backend):
+        with mock.patch.object(pacsys, "_global_backend", mock_backend):
             with mock.patch.object(pacsys, "_backend_initialized", True):
                 results = pacsys.get_many(["M:OUTTMP", device, scalar])
 
@@ -244,7 +250,7 @@ class TestGetMany:
         """get_many() passes timeout to backend."""
         mock_backend.get_many.return_value = [sample_reading]
 
-        with mock.patch.object(pacsys, "_global_dpm_backend", mock_backend):
+        with mock.patch.object(pacsys, "_global_backend", mock_backend):
             with mock.patch.object(pacsys, "_backend_initialized", True):
                 pacsys.get_many(["M:OUTTMP"], timeout=5.0)
 
@@ -292,6 +298,11 @@ class TestConfigure:
         assert pacsys._config_pool_size is None
         assert pacsys._config_timeout is None
 
+    def test_configure_invalid_backend_raises(self):
+        """configure() raises ValueError for invalid backend name."""
+        with pytest.raises(ValueError, match="Invalid backend"):
+            pacsys.configure(backend="nosql")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # shutdown() Tests
@@ -303,13 +314,13 @@ class TestShutdown:
 
     def test_shutdown_closes_backend(self, mock_backend):
         """shutdown() closes the global backend."""
-        pacsys._global_dpm_backend = mock_backend
+        pacsys._global_backend = mock_backend
         pacsys._backend_initialized = True
 
         pacsys.shutdown()
 
         mock_backend.close.assert_called_once()
-        assert pacsys._global_dpm_backend is None
+        assert pacsys._global_backend is None
         assert pacsys._backend_initialized is False
 
     def test_shutdown_multiple_times_safe(self):
@@ -329,7 +340,7 @@ class TestShutdown:
     def test_shutdown_allows_reconfigure(self, mock_backend):
         """After shutdown(), configure() can be called again."""
         # Initialize backend
-        pacsys._global_dpm_backend = mock_backend
+        pacsys._global_backend = mock_backend
         pacsys._backend_initialized = True
 
         # Shutdown and reconfigure
@@ -438,7 +449,7 @@ class TestGlobalBackendInitialization:
 
     def test_backend_not_initialized_at_import(self):
         """Backend is not initialized at import."""
-        assert pacsys._global_dpm_backend is None
+        assert pacsys._global_backend is None
         assert pacsys._backend_initialized is False
 
     def test_backend_initialized_on_first_use(self):
@@ -486,6 +497,66 @@ class TestGlobalBackendInitialization:
         assert backend1 is backend2
         assert MockBackend.call_count == 1
 
+    def test_global_backend_grpc(self):
+        """configure(backend='grpc') creates GRPCBackend."""
+        pacsys.configure(backend="grpc")
+
+        with mock.patch("pacsys.backends.grpc_backend.GRPCBackend") as MockGRPC:
+            mock_instance = mock.MagicMock()
+            MockGRPC.return_value = mock_instance
+
+            backend = pacsys._get_global_backend()
+
+        assert backend is mock_instance
+        MockGRPC.assert_called_once_with(timeout=5.0)
+
+    def test_global_backend_dmq(self):
+        """configure(backend='dmq') creates DMQBackend."""
+        auth = mock.MagicMock(spec=pacsys.Auth)
+        pacsys.configure(backend="dmq", auth=auth)
+
+        with mock.patch("pacsys.backends.dmq.DMQBackend") as MockDMQ:
+            mock_instance = mock.MagicMock()
+            MockDMQ.return_value = mock_instance
+
+            backend = pacsys._get_global_backend()
+
+        assert backend is mock_instance
+        MockDMQ.assert_called_once_with(timeout=5.0, auth=auth)
+
+    def test_global_backend_acl(self):
+        """configure(backend='acl') creates ACLBackend."""
+        pacsys.configure(backend="acl")
+
+        with mock.patch("pacsys.backends.acl.ACLBackend") as MockACL:
+            mock_instance = mock.MagicMock()
+            MockACL.return_value = mock_instance
+
+            backend = pacsys._get_global_backend()
+
+        assert backend is mock_instance
+        MockACL.assert_called_once_with(timeout=5.0)
+
+    def test_global_backend_dpm_with_auth(self):
+        """configure(auth=..., role=...) passes auth/role to DPM backend."""
+        auth = mock.MagicMock(spec=pacsys.Auth)
+        pacsys.configure(auth=auth, role="testing")
+
+        with mock.patch("pacsys.backends.dpm_http.DPMHTTPBackend") as MockDPM:
+            mock_instance = mock.MagicMock(spec=DPMHTTPBackend)
+            MockDPM.return_value = mock_instance
+
+            pacsys._get_global_backend()
+
+        MockDPM.assert_called_once_with(
+            host="acsys-proxy.fnal.gov",
+            port=6802,
+            pool_size=4,
+            timeout=5.0,
+            auth=auth,
+            role="testing",
+        )
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Integration with Device API Tests
@@ -500,7 +571,7 @@ class TestDeviceIntegration:
         mock_backend.read.return_value = 72.5
         mock_backend.get.return_value = sample_reading
 
-        with mock.patch.object(pacsys, "_global_dpm_backend", mock_backend):
+        with mock.patch.object(pacsys, "_global_backend", mock_backend):
             with mock.patch.object(pacsys, "_backend_initialized", True):
                 device = Device("M:OUTTMP")
                 value = device.read()
@@ -511,7 +582,7 @@ class TestDeviceIntegration:
         """ScalarDevice uses global backend when none specified."""
         mock_backend.read.return_value = 72.5
 
-        with mock.patch.object(pacsys, "_global_dpm_backend", mock_backend):
+        with mock.patch.object(pacsys, "_global_backend", mock_backend):
             with mock.patch.object(pacsys, "_backend_initialized", True):
                 device = ScalarDevice("M:OUTTMP")
                 value = device.read()

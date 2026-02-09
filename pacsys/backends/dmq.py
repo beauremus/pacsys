@@ -25,7 +25,7 @@ from pacsys.auth import Auth, KerberosAuth
 from pacsys.backends import Backend, timestamp_from_millis, validate_alarm_dict
 from pacsys.backends._dispatch import CallbackDispatcher
 from pacsys.backends._subscription import BufferedSubscriptionHandle
-from pacsys.errors import AuthenticationError, DeviceError
+from pacsys.errors import AuthenticationError, DeviceError, ReadError
 from pacsys.backends.dmq_protocol import (
     ReadingRequest_request,
     SettingRequest_request,
@@ -695,7 +695,8 @@ class DMQBackend(Backend):
 
         conn.ioloop.add_callback_threadsafe(lambda: self._start_read_async(job))
 
-        if not job.done_event.wait(timeout):
+        timed_out = not job.done_event.wait(timeout)
+        if timed_out:
             # Timeout -- schedule cleanup on IO thread
             if conn.is_open:
                 conn.ioloop.add_callback_threadsafe(lambda: self._complete_read(job))
@@ -710,10 +711,12 @@ class DMQBackend(Backend):
             backfill_msg = "Request timeout"
 
         result: list[Reading] = []
+        has_backfill = False
         for i, drf in enumerate(drfs):
             if i in job.readings:
                 result.append(job.readings[i])
             else:
+                has_backfill = True
                 result.append(
                     Reading(
                         drf=drf,
@@ -726,6 +729,10 @@ class DMQBackend(Backend):
                         cycle=0,
                     )
                 )
+
+        if has_backfill:
+            cause = job.error if job.error is not None else None
+            raise ReadError(result, backfill_msg) from cause
 
         return result
 
