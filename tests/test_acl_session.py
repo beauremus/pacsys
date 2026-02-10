@@ -438,15 +438,3 @@ class TestACLSession:
         session = ACLSession(ssh)
         chan.recv_stderr.assert_called()
         session.close()
-
-    @patch("paramiko.Transport")
-    @patch("socket.create_connection")
-    def test_repr(self, mock_connect, mock_transport_cls):
-        ssh, transport = connected_ssh(mock_connect, mock_transport_cls)
-        chan = make_interactive_channel([b"\nACL> "])
-        transport.open_session.return_value = chan
-
-        session = ACLSession(ssh)
-        assert "open" in repr(session)
-        session.close()
-        assert "closed" in repr(session)

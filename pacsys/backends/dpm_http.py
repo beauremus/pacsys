@@ -617,8 +617,8 @@ class DPMHTTPBackend(Backend):
                             conn.send_messages_batch([stop_req, clear_req])
                         except Exception:
                             conn.close()  # Force-close; pool.release() detects dead conn
-        except (BrokenPipeError, ConnectionResetError, OSError) as e:
-            # Re-raised from inner except — capture but don't propagate raw
+        except Exception as e:
+            # Pool borrow failure, connection error, or re-raised inner exception
             transport_error = e
 
         readings: list[Reading] = []
@@ -1021,21 +1021,24 @@ class DPMHTTPBackend(Backend):
         Raises connection errors for retry handling by caller.
         """
         add_errors: dict[int, int] = {}
+        # Batch all setup messages into a single TCP write
+        setup_msgs: list = []
+
         # Stop and clear previous requests from reused connection
         stop_req = StopList_request()
         stop_req.list_id = list_id
-        conn.send_message(stop_req)
+        setup_msgs.append(stop_req)
 
         clear_req = ClearList_request()
         clear_req.list_id = list_id
-        conn.send_message(clear_req)
+        setup_msgs.append(clear_req)
 
         # Set ROLE list property
         role_req = AddToList_request()
         role_req.list_id = list_id
         role_req.ref_id = 0
         role_req.drf_request = f"#ROLE:{self._role}"
-        conn.send_message(role_req)
+        setup_msgs.append(role_req)
 
         # Add devices to list
         for i, (drf, _) in enumerate(prepared_settings):
@@ -1043,15 +1046,16 @@ class DPMHTTPBackend(Backend):
             add_req.list_id = list_id
             add_req.ref_id = i + 1
             add_req.drf_request = drf
-            conn.send_message(add_req)
+            setup_msgs.append(add_req)
 
         # Start list
         start_req = StartList_request()
         start_req.list_id = list_id
-        conn.send_message(start_req)
+        setup_msgs.append(start_req)
 
-        # Wait for device info
-        device_infos: dict[int, DeviceInfo_reply | Status_reply] = {}
+        conn.send_messages_batch(setup_msgs)
+
+        # Wait for device info / add replies before sending settings
         received_infos = 0
         expected_count = len(prepared_settings)
 
@@ -1074,14 +1078,12 @@ class DPMHTTPBackend(Backend):
                     add_errors[reply.ref_id] = reply.status
                     received_infos += 1
             elif isinstance(reply, DeviceInfo_reply):
-                device_infos[reply.ref_id] = reply
                 received_infos += 1
             elif isinstance(reply, StartList_reply):
                 if reply.status != 0:
                     logger.warning(f"StartList returned status {reply.status}")
                     return None, add_errors
             elif isinstance(reply, Status_reply):
-                device_infos[reply.ref_id] = reply
                 received_infos += 1
 
         # Build and send ApplySettings
@@ -1416,6 +1418,7 @@ class DPMHTTPBackend(Backend):
                     self._dispatcher.dispatch_error(handle._on_error, e, handle)
         finally:
             await conn.close()
+            handle._signal_stop()
             # Remove handle so dead subscriptions don't accumulate
             with self._handles_lock:
                 if handle in self._handles:
@@ -1563,10 +1566,10 @@ class DPMHTTPBackend(Backend):
 
     def close(self) -> None:
         """Close the backend and release all resources."""
-        if self._closed:
-            return
-
-        self._closed = True
+        with self._reactor_lock:
+            if self._closed:
+                return
+            self._closed = True
 
         # Stop streaming first
         self.stop_streaming()

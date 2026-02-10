@@ -288,26 +288,6 @@ def _reply_to_readings(reply, drfs: list[str]) -> list[Reading]:
     return []
 
 
-def _aggregate_timed_readings(readings: list[Reading]) -> Reading:
-    """Collapse multiple scalar readings into a single TIMED_SCALAR_ARRAY reading.
-
-    The gRPC server packs high-frequency / logger data as multiple Reading
-    messages inside one Readings container.  We aggregate them into the same
-    shape the HTTP backend produces for TimedScalarArray replies.
-    """
-    data = np.array([r.value for r in readings], dtype=float)
-    micros = np.array(
-        [int(r.timestamp.timestamp() * 1e6) if r.timestamp else 0 for r in readings],
-        dtype=np.int64,
-    )
-    return Reading(
-        drf=readings[0].drf,
-        value_type=ValueType.TIMED_SCALAR_ARRAY,
-        value={"data": data, "micros": micros},
-        timestamp=readings[0].timestamp,
-    )
-
-
 def _aggregate_proto_readings(reading_list, drf: str, now: datetime) -> Reading:
     """Aggregate proto readings directly into a TIMED_SCALAR_ARRAY.
 

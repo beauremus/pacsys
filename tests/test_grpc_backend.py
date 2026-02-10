@@ -19,7 +19,6 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime
 from unittest import mock
 
 import pytest
@@ -49,7 +48,6 @@ if not GRPC_AVAILABLE:
     pytest.skip("grpc and proto files not available", allow_module_level=True)
 
 import grpc  # noqa: E402
-import numpy as np  # noqa: E402
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1221,64 +1219,6 @@ class TestDaqCoreStream:
 
         # sleeps: 1.0 (err1), 2.0 (err2 — NOT reset), 4.0 (err3 — keeps growing)
         assert sleeps == [1.0, 2.0, 4.0]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# _aggregate_timed_readings Tests
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestAggregateTimedReadings:
-    """Tests for _aggregate_timed_readings — collapses scalar readings into TIMED_SCALAR_ARRAY."""
-
-    def test_basic_aggregation(self):
-        """Multiple scalar readings → single TIMED_SCALAR_ARRAY with correct shape."""
-        ts1 = datetime(2024, 1, 1, 0, 0, 0)
-        ts2 = datetime(2024, 1, 1, 0, 0, 1)
-        ts3 = datetime(2024, 1, 1, 0, 0, 2)
-        readings = [
-            Reading(drf="M:OUTTMP", value_type=ValueType.SCALAR, value=1.0, timestamp=ts1),
-            Reading(drf="M:OUTTMP", value_type=ValueType.SCALAR, value=2.5, timestamp=ts2),
-            Reading(drf="M:OUTTMP", value_type=ValueType.SCALAR, value=3.0, timestamp=ts3),
-        ]
-
-        result = grpc_backend._aggregate_timed_readings(readings)
-
-        assert result.value_type == ValueType.TIMED_SCALAR_ARRAY
-        assert result.drf == "M:OUTTMP"
-        assert result.timestamp == ts1
-        np.testing.assert_array_equal(result.value["data"], [1.0, 2.5, 3.0])
-        assert result.value["micros"].dtype == np.int64
-        assert len(result.value["micros"]) == 3
-
-    def test_timestamps_to_micros(self):
-        """Timestamps are converted to integer microseconds since epoch."""
-        ts = datetime(2024, 6, 15, 12, 0, 0)
-        expected_micros = int(ts.timestamp() * 1e6)
-        readings = [Reading(drf="D:TEST", value_type=ValueType.SCALAR, value=42.0, timestamp=ts)]
-
-        result = grpc_backend._aggregate_timed_readings(readings)
-
-        assert result.value["micros"][0] == expected_micros
-
-    def test_none_timestamp_becomes_zero(self):
-        """A reading with timestamp=None produces micros=0."""
-        readings = [Reading(drf="D:TEST", value_type=ValueType.SCALAR, value=1.0, timestamp=None)]
-
-        result = grpc_backend._aggregate_timed_readings(readings)
-
-        assert result.value["micros"][0] == 0
-
-    def test_single_reading(self):
-        """Single-element list produces length-1 arrays."""
-        ts = datetime(2024, 1, 1)
-        readings = [Reading(drf="D:TEST", value_type=ValueType.SCALAR, value=99.0, timestamp=ts)]
-
-        result = grpc_backend._aggregate_timed_readings(readings)
-
-        assert result.value["data"].shape == (1,)
-        assert result.value["micros"].shape == (1,)
-        assert result.value["data"][0] == 99.0
 
 
 if __name__ == "__main__":

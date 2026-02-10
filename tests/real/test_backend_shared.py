@@ -14,10 +14,11 @@ import pytest
 import time
 import threading
 
+from pacsys.backends import Backend
 from pacsys.drf3 import parse_request
 from pacsys.drf3.property import DRF_PROPERTY
 from pacsys.drf_utils import strip_event
-from pacsys.types import Reading, ValueType, BackendCapability, SubscriptionHandle
+from pacsys.types import BasicControl, Reading, ValueType, BackendCapability, SubscriptionHandle
 from pacsys.errors import DeviceError
 
 from .devices import (
@@ -57,11 +58,11 @@ from .devices import (
 class TestBackendConnection:
     """Tests for backend connection lifecycle (all backends)."""
 
-    def test_backend_has_read_capability(self, read_backend):
+    def test_backend_has_read_capability(self, read_backend: Backend):
         """All backends should have READ capability."""
         assert BackendCapability.READ in read_backend.capabilities
 
-    def test_backend_not_closed_initially(self, read_backend):
+    def test_backend_not_closed_initially(self, read_backend: Backend):
         """Backend should not be closed after creation."""
         assert not read_backend._closed
 
@@ -75,7 +76,7 @@ class TestBackendConnection:
 class TestBackendRead:
     """Tests for basic read operations (all backends)."""
 
-    def test_get_scalar(self, read_backend):
+    def test_get_scalar(self, read_backend: Backend):
         """get() returns Reading with float value for scalar device."""
         reading = read_backend.get(SCALAR_DEVICE, timeout=TIMEOUT_READ)
 
@@ -84,14 +85,14 @@ class TestBackendRead:
         assert isinstance(reading.value, float)
         assert reading.timestamp is not None
 
-    def test_get_second_device(self, read_backend):
+    def test_get_second_device(self, read_backend: Backend):
         """get() works for second test device."""
         reading = read_backend.get(SCALAR_DEVICE_2, timeout=TIMEOUT_READ)
 
         assert reading.ok, f"Failed to read {SCALAR_DEVICE_2}: {reading.message}"
         assert isinstance(reading.value, float)
 
-    def test_get_array(self, read_backend):
+    def test_get_array(self, read_backend: Backend):
         """get() returns array for array device."""
         reading = read_backend.get(ARRAY_DEVICE, timeout=TIMEOUT_READ)
 
@@ -100,7 +101,7 @@ class TestBackendRead:
         assert hasattr(reading.value, "__len__")
         assert len(reading.value) >= 2
 
-    def test_get_array_element(self, read_backend):
+    def test_get_array_element(self, read_backend: Backend):
         """get() returns scalar for array element."""
         reading = read_backend.get(SCALAR_ELEMENT, timeout=TIMEOUT_READ)
 
@@ -118,7 +119,7 @@ class TestBackendRead:
 class TestBackendBatchReads:
     """Tests for batch read operations (all backends)."""
 
-    def test_get_many(self, read_backend):
+    def test_get_many(self, read_backend: Backend):
         """get_many() reads multiple devices in one batch."""
         devices = [SCALAR_DEVICE, SCALAR_DEVICE_2]
         readings = read_backend.get_many(devices, timeout=TIMEOUT_BATCH)
@@ -128,12 +129,12 @@ class TestBackendBatchReads:
             assert reading.ok, f"Failed: {devices[i]}: {reading.message}"
             assert isinstance(reading.value, float)
 
-    def test_get_many_empty_list(self, read_backend):
+    def test_get_many_empty_list(self, read_backend: Backend):
         """get_many() with empty list returns empty list."""
         readings = read_backend.get_many([], timeout=TIMEOUT_READ)
         assert readings == []
 
-    def test_get_many_order_preserved(self, read_backend):
+    def test_get_many_order_preserved(self, read_backend: Backend):
         """get_many() returns readings in same order as request."""
         devices = [SCALAR_DEVICE_2, SCALAR_DEVICE, SCALAR_ELEMENT]
         readings = read_backend.get_many(devices, timeout=TIMEOUT_BATCH)
@@ -142,7 +143,7 @@ class TestBackendBatchReads:
         # All should succeed
         assert all(r.ok for r in readings), f"Failures: {[r.message for r in readings if not r.ok]}"
 
-    def test_get_many_duplicate_drf(self, read_backend):
+    def test_get_many_duplicate_drf(self, read_backend: Backend):
         """get_many() handles same device requested multiple times."""
         devices = [SCALAR_DEVICE, SCALAR_DEVICE_2, SCALAR_DEVICE]
 
@@ -188,7 +189,7 @@ class TestBackendValueTypes:
         return isinstance(backend, GRPCBackend)
 
     @pytest.mark.parametrize("drf,expected_type,python_type,desc", DEVICE_TYPES)
-    def test_get_value_type(self, read_backend, drf, expected_type, python_type, desc):
+    def test_get_value_type(self, read_backend: Backend, drf, expected_type, python_type, desc):
         """get() returns correct value_type for {desc}."""
         if self._is_acl(read_backend):
             req = parse_request(drf)
@@ -208,7 +209,7 @@ class TestBackendValueTypes:
             assert hasattr(reading.value, "__len__")
             assert len(reading.value) >= 2
 
-    def test_get_many_all_types(self, read_backend):
+    def test_get_many_all_types(self, read_backend: Backend):
         """get_many() reads all value types in one batch."""
         if self._is_acl(read_backend):
             pytest.skip("ACL does not support all structured value types")
@@ -236,30 +237,30 @@ class TestBackendValueTypes:
 class TestBackendErrors:
     """Tests for error handling (all backends)."""
 
-    def test_read_nonexistent_raises(self, read_backend):
+    def test_read_nonexistent_raises(self, read_backend: Backend):
         """read() raises DeviceError for nonexistent device."""
         with pytest.raises(DeviceError) as exc_info:
             read_backend.read(NONEXISTENT_DEVICE, timeout=TIMEOUT_READ)
         assert exc_info.value.error_code != 0
 
-    def test_get_nonexistent_returns_error(self, read_backend):
+    def test_get_nonexistent_returns_error(self, read_backend: Backend):
         """get() returns error Reading for nonexistent device."""
         reading = read_backend.get(NONEXISTENT_DEVICE, timeout=TIMEOUT_READ)
         assert not reading.ok
         assert reading.error_code != 0
 
-    def test_get_noprop_error(self, read_backend):
+    def test_get_noprop_error(self, read_backend: Backend):
         """get() returns error for missing property."""
         reading = read_backend.get(NOPROP_DEVICE, timeout=TIMEOUT_READ)
         assert not reading.ok
         assert reading.error_code < 0
 
-    def test_read_setting_on_readonly_raises(self, read_backend):
+    def test_read_setting_on_readonly_raises(self, read_backend: Backend):
         """read() raises DeviceError for SETTING on read-only device."""
         with pytest.raises(DeviceError):
             read_backend.read(SETTING_ON_READONLY, timeout=TIMEOUT_READ)
 
-    def test_get_many_partial_failure(self, read_backend):
+    def test_get_many_partial_failure(self, read_backend: Backend):
         """get_many() handles mix of success and error."""
         devices = [SCALAR_DEVICE, NONEXISTENT_DEVICE, SCALAR_DEVICE_2]
         readings = read_backend.get_many(devices, timeout=TIMEOUT_READ)
@@ -286,7 +287,7 @@ class TestBackendMixedEvents:
         if isinstance(backend, ACLBackend):
             pytest.skip("ACL does not support periodic events; use clock events or immediate reads")
 
-    def test_get_many_mixed_periodic_and_clock_event(self, read_backend):
+    def test_get_many_mixed_periodic_and_clock_event(self, read_backend: Backend):
         """get_many() returns first reading per device for mixed event types.
 
         Tests that when combining a fast periodic (@p,100) with a slow clock
@@ -308,7 +309,7 @@ class TestBackendMixedEvents:
         assert readings[0].ok, f"Periodic device failed: {readings[0].message}"
         assert readings[1].ok, f"Clock event device failed: {readings[1].message}"
 
-    def test_get_many_all_periodic_same_rate(self, read_backend):
+    def test_get_many_all_periodic_same_rate(self, read_backend: Backend):
         """get_many() with multiple periodic devices at same rate gets one reading each."""
         self._skip_if_acl(read_backend)
 
@@ -319,7 +320,7 @@ class TestBackendMixedEvents:
         assert len(readings) == 2
         assert all(r.ok for r in readings), f"Failures: {[r.message for r in readings if not r.ok]}"
 
-    def test_get_many_immediate_with_periodic(self, read_backend):
+    def test_get_many_immediate_with_periodic(self, read_backend: Backend):
         """get_many() with @I (immediate) and @p (periodic) devices."""
         self._skip_if_acl(read_backend)
 
@@ -346,7 +347,7 @@ class TestBackendStreaming:
         if BackendCapability.STREAM not in backend.capabilities:
             pytest.skip("Backend does not support streaming")
 
-    def test_subscribe_callback_mode(self, read_backend):
+    def test_subscribe_callback_mode(self, read_backend: Backend):
         """subscribe() with callback receives readings."""
         self._skip_if_no_stream(read_backend)
 
@@ -367,7 +368,7 @@ class TestBackendStreaming:
         assert len(readings) >= 1
         assert all(r.ok for r in readings)
 
-    def test_subscribe_iterator_mode(self, read_backend):
+    def test_subscribe_iterator_mode(self, read_backend: Backend):
         """subscribe() without callback enables iterator mode."""
         self._skip_if_no_stream(read_backend)
 
@@ -381,7 +382,7 @@ class TestBackendStreaming:
         assert len(readings) >= 1
         assert handle.stopped
 
-    def test_handle_stop_ends_subscription(self, read_backend):
+    def test_handle_stop_ends_subscription(self, read_backend: Backend):
         """handle.stop() stops receiving data."""
         self._skip_if_no_stream(read_backend)
 
@@ -400,7 +401,7 @@ class TestBackendStreaming:
         # Allow 1-2 in-flight readings after stop
         assert count_after <= count_before + 2
 
-    def test_multiple_subscriptions(self, read_backend):
+    def test_multiple_subscriptions(self, read_backend: Backend):
         """Multiple independent subscriptions work."""
         self._skip_if_no_stream(read_backend)
 
@@ -415,7 +416,7 @@ class TestBackendStreaming:
 
         h2.stop()
 
-    def test_backend_close_stops_all(self, read_backend):
+    def test_backend_close_stops_all(self, read_backend: Backend):
         """Backend.close() stops all subscriptions."""
         self._skip_if_no_stream(read_backend)
 
@@ -436,7 +437,7 @@ class TestBackendStreaming:
         if isinstance(backend, DMQBackend):
             pytest.skip("DMQ does not report errors for nonexistent streaming devices")
 
-    def test_subscribe_mixed_valid_and_invalid(self, read_backend):
+    def test_subscribe_mixed_valid_and_invalid(self, read_backend: Backend):
         """Subscription with valid + nonexistent device delivers both data and errors."""
         self._skip_if_no_stream(read_backend)
         self._skip_if_dmq(read_backend)
@@ -474,7 +475,7 @@ class TestBackendStreaming:
             )
             assert invalid_readings[0].is_error or invalid_readings[0].is_warning
 
-    def test_subscribe_invalid_device_reports_error(self, read_backend):
+    def test_subscribe_invalid_device_reports_error(self, read_backend: Backend):
         """Subscription to nonexistent device delivers error/warning (not silent)."""
         self._skip_if_no_stream(read_backend)
         self._skip_if_dmq(read_backend)
@@ -508,14 +509,14 @@ class TestBackendStreaming:
 class TestBackendWrite:
     """Write tests that run against all write-capable backends (DPM HTTP, DMQ)."""
 
-    def test_write_capabilities(self, write_backend):
+    def test_write_capabilities(self, write_backend: Backend):
         """Backend reports WRITE capability when auth is set."""
         assert BackendCapability.WRITE in write_backend.capabilities
         assert BackendCapability.AUTH_KERBEROS in write_backend.capabilities
 
     @pytest.mark.write
     @requires_write_enabled
-    def test_write_scalar(self, write_backend):
+    def test_write_scalar(self, write_backend: Backend):
         """Write a different value, verify readback, then restore original."""
         read_drf = strip_event(SCALAR_SETPOINT)
         original = write_backend.read(read_drf, timeout=TIMEOUT_READ)
@@ -538,7 +539,7 @@ class TestBackendWrite:
 
     @pytest.mark.write
     @requires_write_enabled
-    def test_write_changes_raw(self, write_backend):
+    def test_write_changes_raw(self, write_backend: Backend):
         """Write a scaled value and verify the .RAW readback changes accordingly."""
         original_scaled = write_backend.read(strip_event(SCALAR_SETPOINT), timeout=TIMEOUT_READ)
         original_raw = write_backend.read(SCALAR_SETPOINT_RAW, timeout=TIMEOUT_READ)
@@ -567,7 +568,7 @@ class TestBackendWrite:
     @pytest.mark.parametrize(
         "cmd_true,cmd_false,field", CONTROL_PAIRS, ids=lambda x: x if isinstance(x, str) else x.name
     )
-    def test_control_pair(self, write_backend, cmd_true, cmd_false, field):
+    def test_control_pair(self, write_backend: Backend, cmd_true, cmd_false, field):
         """Toggle control pair and verify the corresponding status bit changes."""
         reading = write_backend.get(STATUS_CONTROL_DEVICE, timeout=TIMEOUT_READ)
         assert reading.ok, f"Failed to read status: {reading.message}"
@@ -597,7 +598,7 @@ class TestBackendWrite:
 
     @pytest.mark.write
     @requires_write_enabled
-    def test_control_reset(self, write_backend):
+    def test_control_reset(self, write_backend: Backend):
         """RESET command succeeds and produces a valid status."""
         result = write_backend.write(STATUS_CONTROL_DEVICE, CONTROL_RESET, timeout=TIMEOUT_READ)
         assert result.success
@@ -607,6 +608,61 @@ class TestBackendWrite:
         assert status.ok, f"Failed to read status after RESET: {status.message}"
         assert isinstance(status.value, dict)
         assert "on" in status.value
+
+    @pytest.mark.write
+    @requires_write_enabled
+    def test_control_mixed(self, write_backend: Backend):
+        """MIXED R/W test."""
+        readings = []
+        event = threading.Event()
+
+        result = write_backend.write(STATUS_CONTROL_DEVICE, BasicControl.NEGATIVE, timeout=TIMEOUT_READ)
+        assert result.success
+
+        def on_reading(reading: Reading, handle: SubscriptionHandle):
+            readings.append(reading)
+            if len(readings) >= 3:
+                result = write_backend.write(STATUS_CONTROL_DEVICE, BasicControl.POSITIVE, timeout=TIMEOUT_READ)
+                assert result.success
+                event.set()
+
+        valid_drf = PERIODIC_DEVICE
+        invalid_drf = f"{NONEXISTENT_DEVICE}@p,500"
+        handle = write_backend.subscribe([valid_drf, invalid_drf], callback=on_reading)
+        h1 = write_backend.subscribe([SCALAR_DEVICE + "@p,500"])
+
+        time.sleep(0.5)
+
+        read1 = write_backend.read(SCALAR_DEVICE_2)
+        assert isinstance(read1, float)
+        read2 = write_backend.get_many([SCALAR_DEVICE_2, SCALAR_ELEMENT, ARRAY_DEVICE])
+        assert all(r.ok for r in read2)
+        for i in range(5):
+            read3 = write_backend.get_many([SCALAR_DEVICE, SCALAR_DEVICE_2, SCALAR_ELEMENT, SCALAR_SETPOINT])
+            assert all(r.ok for r in read3)
+            write = write_backend.write(STATUS_CONTROL_DEVICE, BasicControl.NEGATIVE, timeout=TIMEOUT_READ)
+            assert write.ok
+
+        time.sleep(4.0)
+
+        try:
+            event.wait(timeout=TIMEOUT_STREAM_EVENT)
+        finally:
+            handle.stop()
+
+        assert len(readings) >= 1
+        assert all(r.ok for r in readings if r.name == valid_drf)
+        assert all(not r.ok for r in readings if r.name == invalid_drf)
+
+        j = 0
+        for r in h1.readings():
+            j += 1
+            if j > 3:
+                h1.stop()
+
+        status = write_backend.get(STATUS_CONTROL_DEVICE, timeout=TIMEOUT_READ)
+        assert status.ok, f"Failed to read status after RESET: {status.message}"
+        assert status.value["positive"] is True
 
 
 # =============================================================================
@@ -632,14 +688,14 @@ class TestBackendUnpairedControls:
         ACLTST_UNPAIRED_CONTROLS,
         ids=[name for _, name in ACLTST_UNPAIRED_CONTROLS],
     )
-    def test_unpaired_control_write_succeeds(self, write_backend, ordinal, cmd_name):
+    def test_unpaired_control_write_succeeds(self, write_backend: Backend, ordinal, cmd_name):
         """Unpaired ordinal write is accepted without error."""
         result = write_backend.write(STATUS_CONTROL_DEVICE, ordinal, timeout=TIMEOUT_READ)
         assert result.success, f"Ordinal {ordinal} ({cmd_name}) write failed: {result.error_code} {result.message}"
 
     @pytest.mark.write
     @requires_write_enabled
-    def test_nonexistent_ordinal_rejected(self, write_backend):
+    def test_nonexistent_ordinal_rejected(self, write_backend: Backend):
         """Ordinal beyond device's control table is rejected (DIO_SCALEFAIL)."""
         result = write_backend.write(STATUS_CONTROL_DEVICE, ACLTST_NONEXISTENT_ORDINAL, timeout=TIMEOUT_READ)
         assert not result.success, f"Expected error for ordinal {ACLTST_NONEXISTENT_ORDINAL}, but write succeeded"

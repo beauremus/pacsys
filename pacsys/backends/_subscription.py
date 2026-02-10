@@ -51,6 +51,8 @@ class BufferedSubscriptionHandle(SubscriptionHandle):
         if self._stopped:
             return
         with self._cond:
+            if self._stopped:
+                return
             if len(self._buf) >= self._maxsize:
                 self._drop_count += 1
                 now = time.monotonic()

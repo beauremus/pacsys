@@ -17,6 +17,7 @@ DRF_EXTRA_NAMES = {el.name: el for el in DRF_EXTRA}
 
 
 def parse_extra(raw_string: str) -> DRF_EXTRA:
-    if raw_string not in DRF_EXTRA_NAMES:
+    upper = raw_string.upper()
+    if upper not in DRF_EXTRA_NAMES:
         raise ValueError(f"Invalid extra {raw_string}")
-    return DRF_EXTRA_NAMES[raw_string]
+    return DRF_EXTRA_NAMES[upper]

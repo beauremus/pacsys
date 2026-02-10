@@ -249,8 +249,10 @@ class FakeSubscriptionHandle(SubscriptionHandle):
             self._queue.put(reading)
 
     def _set_error(self, exc: Exception) -> None:
-        """Internal: set error and notify callback."""
+        """Internal: set error, mark stopped, remove from backend, and notify."""
         self._exc = exc
+        self._stopped = True
+        self._remover(self)
         if self._on_error:
             if self._dispatcher is not None:
                 self._dispatcher.dispatch_error(self._on_error, exc, self)
@@ -805,7 +807,7 @@ try:
         """
         import pacsys
 
-        monkeypatch.setattr(pacsys, "_global_dpm_backend", fake_backend)
+        monkeypatch.setattr(pacsys, "_global_backend", fake_backend)
         monkeypatch.setattr(pacsys, "_backend_initialized", True)
         yield fake_backend
 

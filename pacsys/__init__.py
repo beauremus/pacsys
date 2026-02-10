@@ -177,20 +177,11 @@ def _atexit_close_backends() -> None:
 atexit.register(_atexit_close_backends)
 
 
-def configure(
-    dpm_host: Optional[str] = None,
-    dpm_port: Optional[int] = None,
-    pool_size: Optional[int] = None,
-    default_timeout: Optional[float] = None,
-    devdb_host: Optional[str] = None,
-    devdb_port: Optional[int] = None,
-    backend: Optional[str] = None,
-    auth: Optional[Auth] = None,
-    role: Optional[str] = None,
-) -> None:
+def configure(**kwargs) -> None:
     """Configure pacsys global settings.
 
-    Must be called BEFORE any read/get operations.
+    Must be called BEFORE any read/get operations. Pass None to clear
+    a previously set value (falls back to environment variable or default).
 
     Args:
         dpm_host: DPM proxy hostname (default: from PACSYS_DPM_HOST or acsys-proxy.fnal.gov)
@@ -205,11 +196,26 @@ def configure(
 
     Raises:
         RuntimeError: If called after any backend is initialized
-        ValueError: If backend is not a valid backend type
+        ValueError: If backend is not a valid backend type or unknown kwargs
     """
     global _config_dpm_host, _config_dpm_port, _config_pool_size, _config_timeout
     global _config_devdb_host, _config_devdb_port
     global _config_backend, _config_auth, _config_role
+
+    _VALID_KEYS = {
+        "dpm_host",
+        "dpm_port",
+        "pool_size",
+        "default_timeout",
+        "devdb_host",
+        "devdb_port",
+        "backend",
+        "auth",
+        "role",
+    }
+    unknown = set(kwargs) - _VALID_KEYS
+    if unknown:
+        raise ValueError(f"Unknown configure() parameters: {sorted(unknown)}")
 
     with _global_lock:
         if _backend_initialized or _devdb_initialized:
@@ -218,26 +224,27 @@ def configure(
                 "Call shutdown() first to close the backend, then configure() to change settings."
             )
 
-        if backend is not None:
-            if backend not in _VALID_BACKENDS:
+        if "backend" in kwargs:
+            backend = kwargs["backend"]
+            if backend is not None and backend not in _VALID_BACKENDS:
                 raise ValueError(f"Invalid backend {backend!r}, must be one of {sorted(_VALID_BACKENDS)}")
             _config_backend = backend
-        if auth is not None:
-            _config_auth = auth
-        if role is not None:
-            _config_role = role
-        if dpm_host is not None:
-            _config_dpm_host = dpm_host
-        if dpm_port is not None:
-            _config_dpm_port = dpm_port
-        if pool_size is not None:
-            _config_pool_size = pool_size
-        if default_timeout is not None:
-            _config_timeout = default_timeout
-        if devdb_host is not None:
-            _config_devdb_host = devdb_host
-        if devdb_port is not None:
-            _config_devdb_port = devdb_port
+        if "auth" in kwargs:
+            _config_auth = kwargs["auth"]
+        if "role" in kwargs:
+            _config_role = kwargs["role"]
+        if "dpm_host" in kwargs:
+            _config_dpm_host = kwargs["dpm_host"]
+        if "dpm_port" in kwargs:
+            _config_dpm_port = kwargs["dpm_port"]
+        if "pool_size" in kwargs:
+            _config_pool_size = kwargs["pool_size"]
+        if "default_timeout" in kwargs:
+            _config_timeout = kwargs["default_timeout"]
+        if "devdb_host" in kwargs:
+            _config_devdb_host = kwargs["devdb_host"]
+        if "devdb_port" in kwargs:
+            _config_devdb_port = kwargs["devdb_port"]
 
 
 def shutdown() -> None:
@@ -505,7 +512,7 @@ def get_many(
 
 
 def subscribe(
-    drfs: list[str],
+    drfs: list[DeviceSpec],
     callback: Optional[ReadingCallback] = None,
     on_error: Optional[ErrorCallback] = None,
 ) -> SubscriptionHandle:
@@ -515,7 +522,7 @@ def subscribe(
     The handle can be used as a context manager for automatic cleanup.
 
     Args:
-        drfs: List of device request strings (with events, e.g. "M:OUTTMP@p,1000")
+        drfs: List of device request strings or Device objects (with events, e.g. "M:OUTTMP@p,1000")
         callback: Optional function called for each reading, receives (reading, handle).
                  If provided, readings are pushed to the callback on the receiver thread.
                  If None, use handle.readings() to iterate over readings.
@@ -555,8 +562,9 @@ def subscribe(
             on_error=on_error,
         )
     """
+    resolved = [_resolve_drf(d) for d in drfs]
     backend = _get_global_backend()
-    return backend.subscribe(drfs, callback=callback, on_error=on_error)
+    return backend.subscribe(resolved, callback=callback, on_error=on_error)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -398,21 +398,21 @@ class ACLBackend(Backend):
                 facility_code=0,
                 error_code=ERR_RETRY,
                 message=f"ACL request failed ({url}): HTTP {e.response.status_code}",
-            )
-        except httpx.TimeoutException:
+            ) from e
+        except httpx.TimeoutException as e:
             raise DeviceError(
                 drf="",
                 facility_code=0,
                 error_code=ERR_TIMEOUT,
                 message=f"ACL request timed out after {timeout}s ({self._base_url})",
-            )
+            ) from e
         except httpx.TransportError as e:
             raise DeviceError(
                 drf="",
                 facility_code=0,
                 error_code=ERR_RETRY,
                 message=f"ACL request failed ({self._base_url}): {e}",
-            )
+            ) from e
 
     def read(self, drf: str, timeout: Optional[float] = None) -> Value:
         """Read a single device value via HTTP.

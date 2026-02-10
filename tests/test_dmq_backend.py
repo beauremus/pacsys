@@ -575,7 +575,6 @@ class TestDMQBackendRead:
                 reading = exc_info.value.readings[0]
                 assert reading.is_error
                 assert reading.error_code == -1, f"Expected ERR_RETRY (-1) for auth failure, got {reading.error_code}"
-                assert "Authentication failed" in reading.message
                 assert "Kerberos ticket expired" in reading.message
                 assert isinstance(exc_info.value.__cause__, AuthenticationError)
             finally:

@@ -108,7 +108,10 @@ class DataRequest:
         if r is not None:
             rs = str(r)
             out += rs
+        # If property was overridden to a different value, drop inherited field
         f = field or self.field
+        if property is not None and property != self.property:
+            f = field  # Only use explicitly passed field
         if f is not None:
             if DEFAULT_FIELD_FOR_PROPERTY[p] == f:
                 pass
@@ -142,7 +145,10 @@ class DataRequest:
         if r is not None:
             rs = str(r)
             out += rs
+        # If property was overridden to a different value, drop inherited field
         f = field or self.field
+        if property is not None and property != self.property:
+            f = field  # Only use explicitly passed field
         if f is not None:
             if DEFAULT_FIELD_FOR_PROPERTY[p] == f:
                 pass

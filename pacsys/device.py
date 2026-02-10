@@ -52,7 +52,7 @@ class Device:
     Devices are immutable - modification methods return NEW Device instances.
     """
 
-    __slots__ = ("_request", "_backend", "_drf_string")
+    __slots__ = ("_request", "_backend")
 
     def __init__(self, drf: str, backend: Optional[Backend] = None):
         """Create a device from DRF string.
@@ -66,7 +66,6 @@ class Device:
         """
         self._request = parse_request(drf)  # Validates DRF syntax
         self._backend = backend
-        self._drf_string = drf
 
     # ─── Properties ───────────────────────────────────────────────────────
 
@@ -212,7 +211,8 @@ class Device:
             "I",
         )
         value = self._get_backend().read(drf, timeout)
-        assert isinstance(value, str), f"Expected str from DESCRIPTION, got {type(value).__name__}"
+        if not isinstance(value, str):
+            raise TypeError(f"Expected str from DESCRIPTION, got {type(value).__name__}")
         return value
 
     def get(
@@ -320,9 +320,12 @@ class Device:
         raw_value = readings[0].value
         bit_names = readings[1].value
         bit_values = readings[2].value
-        assert isinstance(raw_value, (int, float)), f"Expected numeric BIT_VALUE, got {type(raw_value).__name__}"
-        assert isinstance(bit_names, list), f"Expected list for BIT_NAMES, got {type(bit_names).__name__}"
-        assert isinstance(bit_values, list), f"Expected list for BIT_VALUES, got {type(bit_values).__name__}"
+        if not isinstance(raw_value, (int, float)):
+            raise TypeError(f"Expected numeric BIT_VALUE, got {type(raw_value).__name__}")
+        if not isinstance(bit_names, list):
+            raise TypeError(f"Expected list for BIT_NAMES, got {type(bit_names).__name__}")
+        if not isinstance(bit_values, list):
+            raise TypeError(f"Expected list for BIT_VALUES, got {type(bit_values).__name__}")
         return DigitalStatus.from_bit_arrays(
             device=name,
             raw_value=int(raw_value),

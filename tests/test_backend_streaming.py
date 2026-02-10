@@ -106,17 +106,6 @@ class TestDPMHTTPBackendStreaming:
 class TestGRPCBackendStreaming:
     """Tests for GRPCBackend streaming methods."""
 
-    def test_subscribe_allows_optional_callback(self):
-        """subscribe() should allow optional callback (for iterator mode)."""
-        from pacsys.backends.grpc_backend import GRPCBackend
-
-        backend = GRPCBackend()
-        try:
-            # Should NOT raise - callback is now optional
-            pass  # Just testing that the method signature is correct
-        finally:
-            backend.close()
-
     def test_subscribe_requires_drfs(self):
         """subscribe() should require non-empty drfs."""
         from pacsys.backends.grpc_backend import GRPCBackend

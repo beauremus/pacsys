@@ -167,9 +167,14 @@ class WriteResult:
     attempts: int = 0  # Number of readback attempts made
 
     @property
-    def success(self) -> bool:
+    def ok(self) -> bool:
         """True if write succeeded (error_code == 0)."""
         return self.error_code == 0
+
+    @property
+    def success(self) -> bool:
+        """Alias for ok."""
+        return self.ok
 
 
 class SubscriptionHandle:

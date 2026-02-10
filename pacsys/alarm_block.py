@@ -534,7 +534,7 @@ class AnalogAlarm(AlarmBlock):
 
         name = get_device_name(device)
         offset = segment * 20
-        drf = f"{name}.ANALOG{{{offset}:20}}.RAW@I"
+        drf = f"{name}.ANALOG{{{offset}:20}}.RAW@N"
         result = _get_backend(backend).write(drf, self.to_bytes())
         if not result.success:
             raise RuntimeError(f"Failed to write alarm: {result.message}")
@@ -666,7 +666,7 @@ class DigitalAlarm(AlarmBlock):
 
         name = get_device_name(device)
         offset = segment * 20
-        drf = f"{name}.DIGITAL{{{offset}:20}}.RAW@I"
+        drf = f"{name}.DIGITAL{{{offset}:20}}.RAW@N"
         result = _get_backend(backend).write(drf, self.to_bytes())
         if not result.success:
             raise RuntimeError(f"Failed to write alarm: {result.message}")
@@ -843,7 +843,7 @@ class _AlarmModifyContext:
                 raise RuntimeError(f"Failed to write alarm (raw): {result.message}")
         elif raw_only_changed:
             # Only raw-only fields changed (ftd, fe_data, etc.)
-            raw_drf = f"{name}.{prop}{{{offset}:20}}.RAW@I"
+            raw_drf = f"{name}.{prop}{{{offset}:20}}.RAW@N"
             result = backend.write(raw_drf, current_raw)
             if not result.success:
                 raise RuntimeError(f"Failed to write alarm (raw): {result.message}")
@@ -865,13 +865,13 @@ class _AlarmModifyContext:
         if s is None:
             # Fall back to raw write if no structured data
             offset = self._segment * 20
-            raw_drf = f"{name}.{prop}{{{offset}:20}}.RAW@I"
+            raw_drf = f"{name}.{prop}{{{offset}:20}}.RAW@N"
             result = backend.write(raw_drf, self._block.to_bytes())
             if not result.success:
                 raise RuntimeError(f"Failed to write alarm (raw fallback): {result.message}")
             return
 
-        drf = f"{name}.{prop}@I"
+        drf = f"{name}.{prop}@N"
 
         # Build write value from structured data
         if self._cls is AnalogAlarm:

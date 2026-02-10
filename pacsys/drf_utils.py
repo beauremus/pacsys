@@ -21,7 +21,12 @@ def ensure_immediate_event(drf: str) -> str:
     """
     request = parse_request(drf)
     if request.event is None or request.event.mode == "U":
-        # Append @I to original string (preserves original format)
+        # Insert @I before <-extra if present, otherwise append
+        if request.extra is not None:
+            # Case-insensitive search for the extra marker in original string
+            idx = drf.upper().rfind(f"<-{request.extra.name}")
+            if idx >= 0:
+                return f"{drf[:idx]}@I{drf[idx:]}"
         return f"{drf}@I"
     return drf
 

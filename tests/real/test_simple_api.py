@@ -290,29 +290,29 @@ class TestGlobalBackendLifecycle:
     def test_lazy_initialization(self):
         """Global backend initializes on first use."""
         pacsys.shutdown()
-        assert pacsys._global_dpm_backend is None
+        assert pacsys._global_backend is None
 
         value = pacsys.read(SCALAR_DEVICE, timeout=TIMEOUT_READ)
         assert value is not None
-        assert pacsys._global_dpm_backend is not None
+        assert pacsys._global_backend is not None
 
     def test_backend_reused_across_calls(self):
         """Same backend instance used for multiple calls."""
         pacsys.read(SCALAR_DEVICE, timeout=TIMEOUT_READ)
-        backend1 = pacsys._global_dpm_backend
+        backend1 = pacsys._global_backend
 
         pacsys.read(SCALAR_DEVICE, timeout=TIMEOUT_READ)
-        backend2 = pacsys._global_dpm_backend
+        backend2 = pacsys._global_backend
 
         assert backend1 is backend2
 
     def test_shutdown_cleans_up(self):
         """shutdown() closes backend and allows re-init."""
         pacsys.read(SCALAR_DEVICE, timeout=TIMEOUT_READ)
-        assert pacsys._global_dpm_backend is not None
+        assert pacsys._global_backend is not None
 
         pacsys.shutdown()
-        assert pacsys._global_dpm_backend is None
+        assert pacsys._global_backend is None
 
         value = pacsys.read(SCALAR_DEVICE, timeout=TIMEOUT_READ)
         assert value is not None

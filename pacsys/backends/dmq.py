@@ -691,7 +691,21 @@ class DMQBackend(Backend):
         self._ensure_io_thread()
         conn = self._select_connection
         if conn is None:
-            raise ConnectionError(f"No connection to RabbitMQ at {self._host}:{self._port}")
+            cause = ConnectionError(f"No connection to RabbitMQ at {self._host}:{self._port}")
+            readings = [
+                Reading(
+                    drf=drf,
+                    value_type=ValueType.SCALAR,
+                    facility_code=FACILITY_ACNET,
+                    error_code=ERR_RETRY,
+                    value=None,
+                    message=str(cause),
+                    timestamp=None,
+                    cycle=0,
+                )
+                for drf in drfs
+            ]
+            raise ReadError(readings, str(cause)) from cause
 
         conn.ioloop.add_callback_threadsafe(lambda: self._start_read_async(job))
 
@@ -705,7 +719,7 @@ class DMQBackend(Backend):
         # Build result list
         if job.error is not None:
             backfill_code = ERR_RETRY
-            backfill_msg = f"Authentication failed: {job.error}"
+            backfill_msg = str(job.error)
         else:
             backfill_code = ERR_TIMEOUT
             backfill_msg = "Request timeout"
@@ -730,15 +744,18 @@ class DMQBackend(Backend):
                     )
                 )
 
-        if has_backfill:
-            cause = job.error if job.error is not None else None
-            raise ReadError(result, backfill_msg) from cause
+        # Connection-level errors or total timeout → raise
+        if job.error is not None:
+            raise ReadError(result, backfill_msg) from job.error
+        if has_backfill and not job.readings:
+            raise ReadError(result, backfill_msg)
 
         return result
 
     def _start_read_async(self, job: _ReadJob) -> None:
         """Start async read on IO thread."""
         if self._select_connection is None or not self._select_connection.is_open:
+            job.error = ConnectionError(f"No connection to RabbitMQ at {self._host}:{self._port}")
             job.done_event.set()
             return
 
@@ -1464,19 +1481,14 @@ class DMQBackend(Backend):
         # Match by correlation_id. Server echoes message_id as the response's
         # correlationId; older impl sends empty string. Fall back to FIFO
         # (oldest pending) when correlationId is missing or unknown.
+        # FIFO is safe: single channel + single device = ordered responses.
         if corr_id and corr_id in session.pending:
             i, drf, results, tracker = session.pending.pop(corr_id)
-        elif len(session.pending) == 1:
-            # Unambiguous FIFO fallback: only safe with exactly one pending write
+        elif session.pending:
             oldest_key = next(iter(session.pending))
             i, drf, results, tracker = session.pending.pop(oldest_key)
-            logger.debug(f"Write response matched via FIFO fallback (corr_id={corr_id!r})")
-        elif session.pending:
-            logger.warning(
-                f"Write response with unrecognized correlation_id={corr_id!r} and "
-                f"{len(session.pending)} ambiguous pending writes — dropping response"
-            )
-            return
+            if TRACE:
+                logger.debug(f"Write response matched via FIFO fallback (corr_id={corr_id!r})")
         else:
             return
 

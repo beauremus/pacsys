@@ -371,9 +371,9 @@ class DevDBClient:
         if not DEVDB_AVAILABLE:
             raise ImportError(f"gRPC not available for DevDB: {_import_error}")
 
-        self._host = host or os.environ.get("PACSYS_DEVDB_HOST", "localhost")
-        self._port = port or int(os.environ.get("PACSYS_DEVDB_PORT", "6802"))
-        self._timeout = timeout or 5.0
+        self._host = host if host is not None else os.environ.get("PACSYS_DEVDB_HOST", "localhost")
+        self._port = port if port is not None else int(os.environ.get("PACSYS_DEVDB_PORT", "6802"))
+        self._timeout = timeout if timeout is not None else 5.0
         self._cache = _TTLCache(cache_ttl)
         self._closed = False
 

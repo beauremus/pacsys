@@ -25,6 +25,7 @@ Usage:
 
 import logging
 import threading
+import time
 from contextlib import contextmanager
 from typing import Optional
 
@@ -188,6 +189,7 @@ class ConnectionPool:
             DPMConnectionError: If connection creation fails
         """
         need_create = False
+        deadline = (time.monotonic() + wait_timeout) if wait_timeout is not None else None
 
         with self._condition:
             if self._closed:
@@ -204,8 +206,17 @@ class ConnectionPool:
                     break
 
                 # Pool exhausted, wait for a connection to be released
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise PoolExhaustedError(
+                            f"No DPM connection to {self._host}:{self._port} available after {wait_timeout}s "
+                            f"(pool_size={self._pool_size}, all in use)"
+                        )
+                else:
+                    remaining = None
                 logger.debug("Pool exhausted, waiting for available connection")
-                if not self._condition.wait(timeout=wait_timeout):
+                if not self._condition.wait(timeout=remaining):
                     raise PoolExhaustedError(
                         f"No DPM connection to {self._host}:{self._port} available after {wait_timeout}s "
                         f"(pool_size={self._pool_size}, all in use)"
