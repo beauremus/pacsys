@@ -1,6 +1,6 @@
 # DMQ
 
-RabbitMQ-based backend that communicates with ACNET via the DMQ server (DataBroker/Bunny OAC/DAE). Uses AMQP protocol with SDD binary encoding.
+RabbitMQ-based backend that communicates with ACNET via the DMQ impl1 server (DataBroker/Bunny OAC/DAE). Uses AMQP protocol with SDD binary encoding.
 
 ```mermaid
 sequenceDiagram
@@ -76,7 +76,7 @@ Each write session gets its own AMQP channel with a private "mailbox":
 ```
 Your client creates:
   - A topic exchange (random UUID name, e.g. "a1b2c3d4-...")
-  - A queue bound to that exchange for R.#, Q, and S.# routing keys
+  - A queue bound to that exchange for R.# and Q routing keys
 
 The exchange name is your "return address" - the DMQ server publishes
 responses there so only you receive them.
@@ -116,16 +116,16 @@ in its setter registry. A mismatch means "invalid request".
 
 ### 4. The Response
 
-The server sends back two messages on your exchange:
+The impl1 server sends back one R-keyed response on your exchange:
 
 ```
-S.Z:ACLTST.SETTING@N  →  DoubleSample { value: 45.0 }    ← echo/receipt
 R.Z:ACLTST.SETTING@N  →  DoubleSample { value: 45.0 }    ← actual result
                      (or)  ErrorSample { error: -98 }      ← if something went wrong
 ```
 
-The S-keyed echo confirms the server received your message. The R-keyed
-reply is the authoritative result from ACNET.
+The R-keyed reply is the authoritative result from ACNET. Note that impl1
+sends `correlationId=""` (empty) on write responses, so the client uses
+FIFO ordering to match responses to pending writes.
 
 ### What Can Go Wrong
 
@@ -134,6 +134,10 @@ reply is the authoritative result from ACNET.
 | `DMQ_INVALID_REQUEST` | -98 | Routing key doesn't match INIT dataRequest (exact string match!) |
 | `DMQ_SECURITY_VIOLATION` | -99 | MIC signature verification failed (wrong sign format) |
 | `DMQ_PENDING` | 1 | Not an error - INIT still processing, wait for final status |
+
+For writes, impl1 sends PENDING only after full job creation (`InitTask.run`),
+which includes ACNET backend setup. This can take up to 5s (`CLIENT_INIT_RATE`).
+For reads, PENDING is sent immediately.
 
 The signing format must match Java's `GSSUtil.createBody`: the MIC covers not
 just the binary body but also `messageId`, `correlationId`, `replyTo`, `appId`,

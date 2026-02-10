@@ -1,7 +1,8 @@
 """
 DMQ Backend - RabbitMQ/AMQP backend for ACNET device access.
 
-Uses RabbitMQ message broker to communicate with ACNET via the DMQ server.
+Uses RabbitMQ message broker to communicate with ACNET via the DMQ impl1
+server (reference_code/gov/fnal/controls/service/dmq/impl/).
 """
 
 import logging
@@ -1275,12 +1276,12 @@ class DMQBackend(Backend):
             auto_ack=False,
         )
 
-        # Fail fast: if PENDING doesn't arrive within 2s, the server failed to
-        # process INIT.  Fail queued writes immediately instead of waiting for
-        # the full caller timeout.
+        # Fail fast: if PENDING doesn't arrive within 5s, the server failed to
+        # process INIT.  impl1 sends PENDING for settings only after full job
+        # creation (InitTask.run), so allow up to CLIENT_INIT_RATE (5000ms).
         if self._select_connection is not None:
             session.init_timer = self._select_connection.ioloop.call_later(
-                2.0, lambda: self._fail_unconfirmed_session(session)
+                5.0, lambda: self._fail_unconfirmed_session(session)
             )
 
         # Schedule heartbeat and idle cleanup
@@ -1376,9 +1377,8 @@ class DMQBackend(Backend):
                 sample = self._value_to_sample(value, ref_id=1)
                 body = bytes(sample.marshal())
 
-                # Use message_id as the pending key. The Java server echoes
-                # message_id back as the response's correlationId (impl2), or
-                # sends empty string (impl). Using message_id avoids mismatch.
+                # Use message_id as the pending key. impl1 sends empty
+                # correlationId on write responses; FIFO fallback handles it.
                 message_id = str(uuid.uuid4())
 
                 mic = self._sign_message(session.gss_context, body, message_id)
@@ -1478,9 +1478,9 @@ class DMQBackend(Backend):
                 self._flush_queued_writes(session)
             return
 
-        # Match by correlation_id. Server echoes message_id as the response's
-        # correlationId; older impl sends empty string. Fall back to FIFO
-        # (oldest pending) when correlationId is missing or unknown.
+        # Match by correlation_id. impl1 sends correlationId="" on write
+        # responses (ServerSettingJob.dataChanged). Fall back to FIFO (oldest
+        # pending) when correlationId is missing or unknown.
         # FIFO is safe: single channel + single device = ordered responses.
         if corr_id and corr_id in session.pending:
             i, drf, results, tracker = session.pending.pop(corr_id)
