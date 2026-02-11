@@ -77,6 +77,7 @@ if TYPE_CHECKING:
     from pacsys.backends.acl import ACLBackend
     from pacsys.backends.dmq import DMQBackend
     from pacsys.devdb import DevDBClient
+    from pacsys.supervised import SupervisedServer
 
 __version__ = "0.2.0"
 
@@ -866,6 +867,38 @@ def ssh(
     return _SSHClient(hops=hops, auth=auth, connect_timeout=connect_timeout)
 
 
+def supervised(
+    backend: "Backend",
+    port: int = 50051,
+    host: str = "[::]",
+    policies: Optional[list] = None,
+) -> "SupervisedServer":
+    """Create a supervised gRPC proxy server with logging and policy enforcement.
+
+    Wraps any Backend and exposes it as a gRPC DAQ service, forwarding
+    requests while enforcing access policies and logging all traffic.
+
+    Args:
+        backend: Backend instance to proxy requests to
+        port: Port to listen on (default: 50051). Use 0 for OS-assigned.
+        host: Host to bind (default: "[::] " for all interfaces)
+        policies: Optional list of Policy instances for access control
+
+    Returns:
+        SupervisedServer instance (use as context manager or call start()/stop())
+
+    Example:
+        from pacsys.supervised import ReadOnlyPolicy
+
+        with pacsys.dpm() as backend:
+            with pacsys.supervised(backend, port=50051, policies=[ReadOnlyPolicy()]) as srv:
+                srv.wait()  # Block until interrupted
+    """
+    from pacsys.supervised import SupervisedServer
+
+    return SupervisedServer(backend=backend, port=port, host=host, policies=policies)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Lazy Imports
 # ─────────────────────────────────────────────────────────────────────────────
@@ -970,6 +1003,7 @@ __all__ = [
     "acl",
     "ssh",
     "devdb",
+    "supervised",
     # Submodule
     "acnet",
     # Internal (for Device)
