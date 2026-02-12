@@ -87,6 +87,9 @@ markdown_extensions:
   - md_in_html
   - tables
 
+hooks:
+  - docs/hooks/git_revision.py
+
 plugins:
   - search
   - mkdocstrings:
