@@ -115,7 +115,11 @@ def _value_to_proto_value(value: Value, *, for_write: bool = False) -> "device_p
                 "Alarm writes are not supported via gRPC -- the DPM server does not handle "
                 "alarm settings over this protocol. Use the DPM/HTTP or DMQ backend instead."
             )
-        _dict_to_proto_alarm(value, proto_value)
+        if _is_basic_status_dict(value):
+            for k, v in value.items():
+                proto_value.basicStatus.value[k] = str(v)
+        else:
+            _dict_to_proto_alarm(value, proto_value)
     elif isinstance(value, (list, tuple)):
         if all(isinstance(v, (int, float)) for v in value):
             proto_value.scalarArr.value.extend([float(v) for v in value])
@@ -129,6 +133,14 @@ def _value_to_proto_value(value: Value, *, for_write: bool = False) -> "device_p
         raise ValueError(f"Cannot convert value of type {type(value)} to proto value")
 
     return proto_value
+
+
+_BASIC_STATUS_KEYS = frozenset({"on", "ready", "remote", "positive", "ramp"})
+
+
+def _is_basic_status_dict(d: dict) -> bool:
+    """True if dict looks like a basic status reading (bool values, status keys)."""
+    return bool(d) and set(d.keys()) <= _BASIC_STATUS_KEYS and all(isinstance(v, bool) for v in d.values())
 
 
 def _dict_to_proto_alarm(d: dict, proto_value: "device_pb2.Value") -> None:  # type: ignore[unresolved-attribute]

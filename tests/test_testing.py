@@ -795,12 +795,41 @@ class TestDRFNormalization:
         assert not result.success
 
     def test_all_events_same_device(self):
-        """@I, @N, @p,1000 all reference the same device state."""
+        """@I, @N, @p,1000 all reference the same device state when set without event."""
         fake = FakeBackend()
         fake.set_reading("M:OUTTMP", 72.5)
         assert fake.read("M:OUTTMP.READING@I") == 72.5
         assert fake.read("M:OUTTMP.READING@p,1000") == 72.5
         assert fake.read("M:OUTTMP.READING@N") == 72.5
+
+    def test_same_device_different_events_discriminated(self):
+        """Event-specific set_reading entries are kept separate."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP@p,500", 1.0)
+        fake.set_reading("M:OUTTMP@e,02", 2.0)
+        assert fake.read("M:OUTTMP@p,500") == 1.0
+        assert fake.read("M:OUTTMP@e,02") == 2.0
+
+    def test_same_device_different_events_get_many(self):
+        """get_many returns distinct readings per event for the same device."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP@p,500", 1.0)
+        fake.set_reading("M:OUTTMP@e,02", 2.0)
+        readings = fake.get_many(["M:OUTTMP@p,500", "M:OUTTMP@e,02"])
+        assert readings[0].value == 1.0
+        assert readings[1].value == 2.0
+        assert "@p" in readings[0].drf.lower()
+        assert "@e" in readings[1].drf.lower()
+
+    def test_eventless_fallback_with_event_specific_entries(self):
+        """Reading with unregistered event falls back to base (last-set-wins)."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP@p,500", 1.0)
+        fake.set_reading("M:OUTTMP@e,02", 2.0)
+        # Base key was updated by last set_reading, so eventless read gets 2.0
+        assert fake.read("M:OUTTMP") == 2.0
+        # Unregistered event also falls back to base
+        assert fake.read("M:OUTTMP@I") == 2.0
 
     def test_error_normalization(self):
         """set_error short form matches Device.read() full form."""

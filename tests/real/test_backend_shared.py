@@ -333,6 +333,34 @@ class TestBackendMixedEvents:
         assert readings[0].ok, f"Immediate device failed: {readings[0].message}"
         assert readings[1].ok, f"Periodic device failed: {readings[1].message}"
 
+    def test_get_many_same_device_periodic_and_clock(self, read_backend: Backend):
+        """Same device at periodic and clock event returns two distinct readings."""
+        self._skip_if_acl(read_backend)
+
+        devices = [f"{SCALAR_DEVICE}@p,500", f"{SCALAR_DEVICE}@e,02"]
+        readings = read_backend.get_many(devices, timeout=10.0)
+
+        assert len(readings) == 2
+        assert readings[0].ok, f"Periodic failed: {readings[0].message}"
+        assert readings[1].ok, f"Clock event failed: {readings[1].message}"
+        # Verify DRF carries the correct event so callers can discriminate
+        assert "@p" in readings[0].drf.lower(), f"Expected periodic event in drf: {readings[0].drf}"
+        assert "@e" in readings[1].drf.lower(), f"Expected clock event in drf: {readings[1].drf}"
+
+    def test_get_many_same_device_two_clock_events(self, read_backend: Backend):
+        """Same device at two different clock events (02 and 52)."""
+        self._skip_if_acl(read_backend)
+
+        devices = [f"{SCALAR_DEVICE}@e,02", f"{SCALAR_DEVICE}@e,52"]
+        readings = read_backend.get_many(devices, timeout=10.0)
+
+        assert len(readings) == 2
+        assert readings[0].ok, f"Event 02 failed: {readings[0].message}"
+        assert readings[1].ok, f"Event 52 failed: {readings[1].message}"
+        # Verify each reading carries its specific clock event
+        assert "02" in readings[0].drf, f"Expected event 02 in drf: {readings[0].drf}"
+        assert "52" in readings[1].drf, f"Expected event 52 in drf: {readings[1].drf}"
+
 
 # =============================================================================
 # Streaming Tests

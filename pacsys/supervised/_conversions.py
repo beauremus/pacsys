@@ -14,12 +14,14 @@ from pacsys.types import Reading, WriteResult
 def reading_to_proto_reply(reading: Reading, index: int) -> "DAQ_pb2.ReadingReply":  # type: ignore[unresolved-attribute]
     """Convert a Reading to a ReadingReply proto message.
 
-    Error readings use the status oneof; success readings use the readings oneof.
+    Readings without usable data (errors AND warnings-without-data) use the
+    status oneof — matching real DPM gRPC server behavior. Only readings with
+    actual values use the readings oneof.
     """
     reply = DAQ_pb2.ReadingReply()  # type: ignore[unresolved-attribute]
     reply.index = index
 
-    if reading.is_error:
+    if not reading.ok:
         reply.status.facility_code = reading.facility_code
         reply.status.status_code = reading.error_code
         if reading.message:

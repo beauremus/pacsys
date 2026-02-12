@@ -32,12 +32,12 @@ from pacsys.errors import DeviceError
 from pacsys.drf_utils import get_device_name
 
 
-def _normalize_drf(drf: str) -> str:
-    """Normalize DRF to device-state key: device + property + field + extra.
+def _base_key(drf: str) -> str:
+    """Normalize DRF to device-state key WITHOUT event.
 
-    Strips events (acquisition mode) and ranges (resolved at read time)
-    so that different access patterns (@I, @N, @p,1000) and different
-    range requests all reference the same underlying device state.
+    Strips events and ranges so that different access patterns and range
+    requests reference the same underlying device state.  Used as fallback
+    when no event-specific entry exists.
     """
     try:
         req = parse_request(drf)
@@ -53,6 +53,35 @@ def _normalize_drf(drf: str) -> str:
         return out
     except ValueError:
         return drf
+
+
+def _full_key(drf: str) -> str:
+    """Normalize DRF to device-state key WITH event.
+
+    Like _base_key but preserves event so that same-device/different-event
+    requests get distinct storage slots.
+    """
+    try:
+        req = parse_request(drf)
+        out = req.device
+        if req.property is not None:
+            out += f".{req.property.name}"
+        if req.field is not None:
+            default = DEFAULT_FIELD_FOR_PROPERTY.get(req.property)
+            if req.field != default:
+                out += f".{req.field.name}"
+        if req.event is not None and req.event.mode != "U":
+            out += f"@{req.event.raw_string}"
+        if req.extra is not None:
+            out += f"<-{req.extra.name}"
+        return out
+    except ValueError:
+        return drf
+
+
+def _normalize_drf(drf: str) -> str:
+    """Backward-compatible alias for _base_key."""
+    return _base_key(drf)
 
 
 def _get_range(drf: str) -> ARRAY_RANGE | BYTE_RANGE | None:
@@ -267,8 +296,11 @@ class FakeBackend(Backend):
 
     Models devices as shared state: writes update the stored value,
     subsequent reads return it.  Keys are device identity (name + property +
-    field) -- events and ranges are stripped so @I, @N, @p,1000 all hit the
-    same state.  Range requests slice the stored value at read time.
+    field + event) -- ranges are stripped and applied at read time.
+
+    Event handling: when values are set with an explicit event, they get
+    a distinct storage slot.  An eventless set acts as a fallback for any
+    event not explicitly configured.
 
     Example:
         fake = FakeBackend()
@@ -336,8 +368,9 @@ class FakeBackend(Backend):
             units=units,
         )
 
-        key = _normalize_drf(drf)
-        self._readings[key] = Reading(
+        full = _full_key(drf)
+        base = _base_key(drf)
+        reading = Reading(
             drf=drf,
             value_type=value_type,
             value=value,
@@ -346,9 +379,12 @@ class FakeBackend(Backend):
             cycle=cycle,
             meta=meta,
         )
+        self._readings[full] = reading
+        self._readings[base] = reading
 
         # Remove any error for this DRF
-        self._errors.pop(key, None)
+        self._errors.pop(full, None)
+        self._errors.pop(base, None)
 
     def set_error(self, drf: str, error_code: int, message: str) -> None:
         """Pre-configure an error for a device.
@@ -358,10 +394,13 @@ class FakeBackend(Backend):
             error_code: Negative error code
             message: Error message
         """
-        key = _normalize_drf(drf)
-        self._errors[key] = (error_code, message)
+        full = _full_key(drf)
+        base = _base_key(drf)
+        self._errors[full] = (error_code, message)
+        self._errors[base] = (error_code, message)
         # Remove any reading for this DRF
-        self._readings.pop(key, None)
+        self._readings.pop(full, None)
+        self._readings.pop(base, None)
 
     def set_write_result(
         self,
@@ -381,11 +420,15 @@ class FakeBackend(Backend):
         if error_code is None:
             error_code = ERR_OK if success else ERR_RETRY
 
-        self._write_results[_normalize_drf(drf)] = WriteResult(
+        full = _full_key(drf)
+        base = _base_key(drf)
+        wr = WriteResult(
             drf=drf,
             error_code=error_code,
             message=message,
         )
+        self._write_results[full] = wr
+        self._write_results[base] = wr
 
     def set_analog_alarm(self, drf: str, alarm_dict: dict) -> None:
         """Pre-configure an analog alarm structured reading.
@@ -450,6 +493,22 @@ class FakeBackend(Backend):
         self._write_history.clear()
         self.stop_streaming()
 
+    def _find_reading(self, drf: str) -> Reading | None:
+        """Lookup reading: event-specific key first, then base key."""
+        full = _full_key(drf)
+        if full in self._readings:
+            return self._readings[full]
+        base = _base_key(drf)
+        return self._readings.get(base)
+
+    def _find_error(self, drf: str) -> tuple[int, str] | None:
+        """Lookup error: event-specific key first, then base key."""
+        full = _full_key(drf)
+        if full in self._errors:
+            return self._errors[full]
+        base = _base_key(drf)
+        return self._errors.get(base)
+
     def _device_known(self, drf: str) -> bool:
         """Check if any reading or error is configured for this device name."""
         name = get_device_name(drf)
@@ -490,16 +549,16 @@ class FakeBackend(Backend):
             DeviceError: If an error was configured or no reading exists
         """
         self._read_history.append(drf)
-        key = _normalize_drf(drf)
+        error = self._find_error(drf)
+        reading = self._find_reading(drf)
 
         # Check for configured error
-        if key in self._errors:
-            error_code, message = self._errors[key]
+        if error is not None:
+            error_code, message = error
             raise DeviceError(drf, FACILITY_ACNET, error_code, message)
 
         # Check for configured reading
-        if key in self._readings:
-            reading = self._readings[key]
+        if reading is not None:
             if reading.is_error:
                 raise DeviceError(
                     drf,
@@ -525,11 +584,12 @@ class FakeBackend(Backend):
             Reading object (may have is_error=True)
         """
         self._read_history.append(drf)
-        key = _normalize_drf(drf)
+        error = self._find_error(drf)
+        reading = self._find_reading(drf)
 
         # Check for configured error
-        if key in self._errors:
-            error_code, message = self._errors[key]
+        if error is not None:
+            error_code, message = error
             return Reading(
                 drf=drf,
                 value_type=ValueType.SCALAR,
@@ -537,13 +597,13 @@ class FakeBackend(Backend):
                 message=message,
             )
 
-        # Check for configured reading
-        if key in self._readings:
-            reading = self._readings[key]
+        # Check for configured reading — return with caller's DRF
+        if reading is not None:
             rng = _get_range(drf)
-            if rng is not None and reading.value is not None:
-                return replace(reading, value=_apply_range(drf, reading.value, rng))
-            return reading
+            value = reading.value
+            if rng is not None and value is not None:
+                value = _apply_range(drf, value, rng)
+            return replace(reading, drf=drf, value=value)
 
         # No reading configured -- distinguish property-not-found from unknown device
         if self._device_known(drf):
@@ -594,17 +654,18 @@ class FakeBackend(Backend):
             Pre-configured WriteResult, or success by default
         """
         self._write_history.append((drf, value))
-        key = _normalize_drf(drf)
+        full = _full_key(drf)
+        base = _base_key(drf)
 
-        # Check for configured write result
-        if key in self._write_results:
-            result = self._write_results[key]
+        # Check for configured write result (full key first, then base)
+        result = self._write_results.get(full) or self._write_results.get(base)
+        if result is not None:
             if result.success:
-                self._update_state(key, drf, value)
+                self._update_state(base, drf, value)
             return result
 
         # Default: write succeeds and updates state
-        self._update_state(key, drf, value)
+        self._update_state(base, drf, value)
         return WriteResult(drf=drf, error_code=ERR_OK)
 
     def _update_state(self, key: str, drf: str, value: Value) -> None:
