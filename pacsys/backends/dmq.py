@@ -81,7 +81,7 @@ TRACE = False
 DEFAULT_HOST = os.environ.get("PACSYS_DMQ_HOST", "appsrv2.fnal.gov")
 DEFAULT_PORT = int(os.environ.get("PACSYS_DMQ_PORT", "5672"))
 DEFAULT_VHOST = "/"
-DEFAULT_TIMEOUT = 5.0
+DEFAULT_TIMEOUT = 10.0
 INIT_EXCHANGE = "amq.topic"
 
 # PENDING status in DMQ - errorNumber=1 means init in progress
@@ -495,7 +495,7 @@ class DMQBackend(Backend):
             host: RabbitMQ broker hostname (default: appsrv2.fnal.gov)
             port: RabbitMQ broker port (default: 5672)
             vhost: RabbitMQ virtual host (default: /)
-            timeout: Default operation timeout in seconds (default: 5.0)
+            timeout: Default operation timeout in seconds (default: 10.0)
             auth: KerberosAuth required for all DMQ operations
             write_session_ttl: Idle timeout for write sessions in seconds (default: 600)
 
@@ -1759,19 +1759,23 @@ class DMQBackend(Backend):
         """Start the IO thread and SelectConnection if not already running."""
         with self._stream_lock:
             if self._io_thread is not None and self._io_thread.is_alive():
-                return
-            if self._closed:
-                raise RuntimeError("Backend is closed")
+                # Thread exists — still verify connection is ready before returning
+                if self._connection_ready.is_set() and self._connection_error is None:
+                    return
+                # Connection not ready yet (startup in progress) — fall through to wait
+            else:
+                if self._closed:
+                    raise RuntimeError("Backend is closed")
 
-            self._connection_ready.clear()
-            self._connection_error = None
+                self._connection_ready.clear()
+                self._connection_error = None
 
-            self._io_thread = threading.Thread(
-                target=self._io_loop_thread,
-                name="DMQBackend-IOLoop",
-                daemon=True,
-            )
-            self._io_thread.start()
+                self._io_thread = threading.Thread(
+                    target=self._io_loop_thread,
+                    name="DMQBackend-IOLoop",
+                    daemon=True,
+                )
+                self._io_thread.start()
 
         # Wait for connection to be ready
         if not self._connection_ready.wait(timeout=self._timeout):
@@ -1885,6 +1889,9 @@ class DMQBackend(Backend):
             subs = list(self._subscriptions.values())
             self._subscriptions.clear()
         for sub in subs:
+            # Unblock any thread waiting on subscription setup
+            sub.setup_error = reason
+            sub.setup_complete.set()
             sub.handle._signal_error(reason)
             if sub.handle._on_error is not None:
                 self._dispatcher.dispatch_error(sub.handle._on_error, reason, sub.handle)
