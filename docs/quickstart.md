@@ -59,7 +59,7 @@ with pacsys.subscribe(["M:OUTTMP@p,1000"]) as stream:
             stream.stop() # will stop iterating on next loop
 ```
 
-The `@p,1000` means "send data every 1000 milliseconds". For streaming, one of repeating event types must be specified.
+The `@p,1000` means "send data every 1000 milliseconds". For streaming, a repeating event type must be specified.
 
 :material-arrow-right: [Streaming Guide](guide/streaming.md) - callbacks, CombinedStream, error handling
 
@@ -71,7 +71,7 @@ The `@p,1000` means "send data every 1000 milliseconds". For streaming, one of r
 from pacsys import KerberosAuth
 import pacsys
 
-auth = KerberosAuth() # will grab default ticket from whichever library is loaded
+auth = KerberosAuth()  # requires kinit beforehand
 
 with pacsys.dpm(auth=auth, role="testing") as backend:
     result = backend.write("Z:ACLTST", 45.0)
@@ -79,7 +79,7 @@ with pacsys.dpm(auth=auth, role="testing") as backend:
         print("Write successful")
 ```
 
-pacsys automatically converts READING to SETTING and STATUS to CONTROL when writing.
+PACSys automatically converts READING to SETTING and STATUS to CONTROL when writing.
 
 :material-arrow-right: [Writing Guide](guide/writing.md) - all value types, batch writes, alarm config, device control
 

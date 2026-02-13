@@ -84,7 +84,7 @@ Results are returned in the same order as the input list. Devices that time out 
 
 ## Reading by Property
 
-The second character of the device name (or an explicit `.PROPERTY`) determines what you read.
+The qualifier character in the device address (or an explicit `.PROPERTY` suffix) determines what you read.
 
 ### Scalar Reading (default)
 

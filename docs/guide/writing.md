@@ -1,10 +1,35 @@
 # Writing to Devices
 
-This guide covers all write operations: scalars, arrays, raw bytes, alarm configuration, and device control.
+Write operations allow setting scalars, arrays, raw bytes, alarm configuration, and device control.
 
-!!! danger "Authorization Required"
+!!! warning "Authorization Required"
     Writing to devices requires authentication and proper permissions.
     Writes without auth raise `AuthenticationError`.
+
+---
+
+## Simple API
+
+The quickest way to write — uses the global backend:
+
+```python
+import pacsys
+
+# Console class writes — just need a Kerberos ticket (kinit)
+pacsys.write("Z:ACLTST", 45.0)
+
+# Role-based writes — configure role first
+pacsys.configure(role="testing")
+pacsys.write("Z:ACLTST", 45.0)
+
+# Batch
+results = pacsys.write_many([
+    ("Z:ACLTST", 45.0),
+    ("G:AMANDA", 1.0),
+])
+```
+
+The global DPM/HTTP backend auto-creates lazy Kerberos auth — credentials are only validated on the first write. For explicit auth, use `pacsys.configure(auth=pacsys.KerberosAuth())`.
 
 ---
 
@@ -13,24 +38,25 @@ This guide covers all write operations: scalars, arrays, raw bytes, alarm config
 ### DPM/HTTP - Kerberos
 
 ```python
-from pacsys import KerberosAuth
 import pacsys
 
-auth = KerberosAuth()   # Requires `kinit` beforehand
+auth = pacsys.KerberosAuth()   # Default principal from `kinit`
+
+# Specific principal (e.g., multiple tickets in cache)
+auth = pacsys.KerberosAuth(name="operator@FNAL.GOV")
 
 with pacsys.dpm(auth=auth, role="testing") as backend:
     result = backend.write("Z:ACLTST", 45.0)
 ```
 
-Both `auth` and `role` are required. Without `role`, writes raise `AuthenticationError("Role required")`.
+`auth` is required. `role` is optional — console class writes work without it, but role-based device access requires it (e.g., `role="testing"`).
 
 ### DPM/gRPC - JWT
 
 ```python
-from pacsys import JWTAuth
 import pacsys
 
-auth = JWTAuth(token="eyJ...")   # Or set PACSYS_JWT_TOKEN env var
+auth = pacsys.JWTAuth(token="eyJ...")   # Or set PACSYS_JWT_TOKEN env var
 
 with pacsys.grpc(auth=auth) as backend:
     result = backend.write("Z:ACLTST", 45.0)
@@ -39,10 +65,9 @@ with pacsys.grpc(auth=auth) as backend:
 ### DMQ - Kerberos
 
 ```python
-from pacsys import KerberosAuth
 import pacsys
 
-auth = KerberosAuth()
+auth = pacsys.KerberosAuth()
 
 with pacsys.dmq(auth=auth) as backend:
     result = backend.write("Z:ACLTST", 45.0)
@@ -90,7 +115,7 @@ Write unscaled binary data directly:
 result = backend.write("Z:ACLTST.SETTING.RAW", b"\x34\x43\x00\x00")
 ```
 
-Use the `.RAW` property suffix to bypass database scaling transformations.
+Use the `.RAW` field suffix to bypass scaling transformations.
 
 ### Array
 
@@ -118,13 +143,13 @@ for result in results:
         print(f"Failed: {result.drf} - {result.message}")
 ```
 
-All devices are written in the same DPM request. Results are returned in the same order as the input list.
+All devices are written in the same request if possible. Results are returned in the same order as the input list.
 
 ---
 
 ## Implicit Property Conversion
 
-When writing, pacsys automatically converts read properties to their writable counterparts and forces the `@N` (never) event:
+When writing, PACSys automatically converts read properties to their writable counterparts and forces the `@N` (never) event:
 
 | Input | Wire request | Why |
 |-------|-------------|-----|
@@ -148,7 +173,8 @@ Use `BasicControl` enum values to send control commands:
 from pacsys import BasicControl
 
 # Turn device on/off
-backend.write("Z|ACLTST", BasicControl.ON)
+backend.write("Z&ACLTST", BasicControl.ON)
+backend.write("Z|ACLTST", BasicControl.ON)  # STATUS → CONTROL auto-conversion
 backend.write("Z|ACLTST", BasicControl.OFF)
 
 # Other control commands
@@ -157,12 +183,6 @@ backend.write("Z|ACLTST", BasicControl.POSITIVE)
 backend.write("Z|ACLTST", BasicControl.NEGATIVE)
 backend.write("Z|ACLTST", BasicControl.RAMP)
 backend.write("Z|ACLTST", BasicControl.DC)
-```
-
-The `|` qualifier (STATUS) is automatically converted to CONTROL for writes. You can also use `&` (CONTROL) directly:
-
-```python
-backend.write("Z&ACLTST", BasicControl.ON)
 ```
 
 !!! note "Control Commands Are Sequential"
@@ -190,9 +210,9 @@ backend.write("Z$ACLTST.NOM", 0x0001)      # Set nominal bit pattern
 backend.write("Z$ACLTST.MASK", 0x00FF)     # Set mask
 ```
 
-### Dict Shortcut (DPM/HTTP)
+### Dict Shortcut
 
-On the DPM/HTTP backend, you can write multiple alarm fields by passing a dict:
+On any writable backend, you can write multiple alarm fields by passing a dict:
 
 ```python
 # Analog alarm - set multiple fields at once
@@ -218,7 +238,7 @@ Allowed keys for digital alarms: `nominal`, `mask`, `alarm_enable`, `abort_inhib
 Unknown keys raise `ValueError`. Boolean values are converted to 0/1 automatically.
 
 !!! info "Implementation Detail"
-    The DPM protocol has no structured alarm write message. The dict is expanded to individual per-field writes issued sequentially (alarm fields share a hardware block and would overwrite each other in a batch).
+    The DPM protocol used in DPM/HTTP has no structured alarm write message. The dict is expanded to individual per-field writes issued sequentially (alarm fields share a hardware block and would overwrite each other in a batch).
 
 ### Context Manager (Recommended)
 
@@ -256,13 +276,13 @@ Note: verification is a `Device.write()` feature, not a backend `write()` featur
 ## Error Handling
 
 ```python
-from pacsys import AuthenticationError, DeviceError
+import pacsys
 
 try:
     result = backend.write("Z:ACLTST", 45.0)
     if not result.success:
         print(f"Write rejected: {result.message}")
-except AuthenticationError as e:
+except pacsys.AuthenticationError as e:
     print(f"Auth failed: {e}")
 ```
 
@@ -285,7 +305,6 @@ print(f"Failed: {results[1].error_code}")
 | Situation | Exception / Result |
 |-----------|-------------------|
 | No auth configured | `AuthenticationError("not configured for authenticated")` |
-| Auth but no role (DPM) | `AuthenticationError("Role required")` |
 | Dict write to non-alarm DRF | `ValueError("Cannot write dict to READING property")` |
 | Dict write to STATUS/CONTROL | `ValueError` pointing to `BasicControl` enum |
 | Device not writable | `WriteResult.success == False` |
@@ -297,9 +316,7 @@ print(f"Failed: {results[1].error_code}")
 | Feature | DPM/HTTP | gRPC | DMQ |
 |---------|----------|----------|-----|
 | Auth type | Kerberos + role | JWT | Kerberos (no role) |
-| Alarm dict write | Yes (sequential) | No | Yes (atomic) |
-| Verify | Via Device API | Via Device API | Via Device API |
-| Batch write | `write_many()` | `write_many()` | `write_many()` |
+| Alarm dict write | Yes (sequential) | Yes (atomic) | Yes (atomic) |
 
 ---
 

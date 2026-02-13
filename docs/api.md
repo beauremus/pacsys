@@ -23,6 +23,16 @@ These functions use a global backend that is automatically initialized on first 
       show_root_heading: true
       heading_level: 3
 
+::: pacsys.write
+    options:
+      show_root_heading: true
+      heading_level: 3
+
+::: pacsys.write_many
+    options:
+      show_root_heading: true
+      heading_level: 3
+
 ::: pacsys.subscribe
     options:
       show_root_heading: true
@@ -69,6 +79,16 @@ Create explicit backend instances for more control.
       show_root_heading: true
       heading_level: 3
 
+::: pacsys.devdb
+    options:
+      show_root_heading: true
+      heading_level: 3
+
+::: pacsys.supervised
+    options:
+      show_root_heading: true
+      heading_level: 3
+
 ---
 
 ## Types
@@ -81,14 +101,19 @@ Create explicit backend instances for more control.
       heading_level: 3
       members:
         - value
+        - value_type
         - name
+        - drf
         - units
         - timestamp
+        - cycle
+        - facility_code
+        - error_code
+        - message
         - is_success
         - is_error
         - is_warning
         - ok
-        - message
 
 ### WriteResult
 
@@ -158,6 +183,13 @@ Create explicit backend instances for more control.
       show_root_heading: true
       heading_level: 3
 
+### ACLError
+
+::: pacsys.errors.ACLError
+    options:
+      show_root_heading: true
+      heading_level: 3
+
 ---
 
 ## Device Classes
@@ -173,10 +205,28 @@ Object-oriented interface for device access.
       members:
         - drf
         - name
+        - request
+        - has_event
+        - is_periodic
         - read
         - get
+        - setting
+        - status
+        - analog_alarm
+        - digital_alarm
+        - description
+        - digital_status
+        - info
+        - write
+        - control
+        - on
+        - off
+        - reset
+        - set_analog_alarm
+        - set_digital_alarm
         - with_backend
         - with_event
+        - with_range
 
 ### ScalarDevice
 

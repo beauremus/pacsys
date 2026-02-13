@@ -141,7 +141,7 @@ Uses brackets with element indices:
 
 ### Byte Range
 
-Uses braces with byte offset/length (discouraged-requires frontend knowledge):
+Uses braces with byte offset/length (discouraged -- requires frontend knowledge):
 
 | Syntax | Meaning |
 |--------|---------|
@@ -209,7 +209,6 @@ Continuous data at fixed intervals:
 
 | Syntax | Meaning |
 |--------|---------|
-| `@p,1000` | Every 1000ms |
 | `@p,1000` | Every 1000ms (= 1 second) |
 | `@p,500,TRUE` | 500ms, immediate first reading |
 | `@q,1000` | Non-continuous (only on change) |

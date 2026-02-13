@@ -94,7 +94,7 @@ alarm.bypass = False
 alarm.write("Z:ACLTST")
 ```
 
-Note: for manual style writes, all alarm fields are written every time
+Note: for manual-style writes, all alarm fields are written every time.
 
 ---
 

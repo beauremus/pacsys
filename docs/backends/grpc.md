@@ -1,6 +1,6 @@
 # DPM/gRPC
 
-Modern gRPC interface to DPM. Will be default in the future. Uses Protocol Buffers for serialization.
+Modern gRPC interface to DPM. Will be the default in the future. Uses Protocol Buffers for serialization.
 
 ```mermaid
 sequenceDiagram
@@ -54,4 +54,4 @@ with pacsys.grpc(auth=auth) as backend:
 
 ## Write Permissions (JWT)
 
-JWT tokens are introspected server-side via a Keycloak endpoint. Your token's `realm_access.roles` determine which devices you can write to. Roles are mapped to ACNET console classes (e.g. `MCR`, `ASTA`, ...). Same bitwise check logic is applied as for DPM/HTTP.
+JWT tokens are introspected server-side via a Keycloak endpoint. Your token's `realm_access.roles` determine which devices you can write to. Roles are mapped to ACNET console classes (e.g. `MCR`, `ASTA`, ...). The same bitwise check logic is applied as for DPM/HTTP.

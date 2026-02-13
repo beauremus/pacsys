@@ -1,6 +1,6 @@
 # Ramp Tables
 
-The `Ramp` class provides convenient interface for reading and writing ramp tables. Multi-device `RampGroup` provides batched 2D-array access.
+The `Ramp` class provides convenient interface for reading and writing ramp tables. The multi-device `RampGroup` provides batched 2D-array access.
 
 ## Overview
 
@@ -29,7 +29,7 @@ There are two ways to define the scaling:
 
 Pre-defined subclasses for common elements:
 
-| Class | Card | Example | Primary (p_index) | Common (c_index) |
+| Class | Card | Examples | Primary (p_index) | Common (c_index) |
 |-------|------|---------|-------------------|-----------------|
 | `BoosterHVRamp` | C473 | B:HS23T, B:SSS23T, B:SXS23T | raw / 3276.8 (2) | primary × 4.0 (6, C1=4.0, C2=1.0) |
 | `BoosterQRamp` | C473 | B:QS23T | raw / 3276.8 (2) | primary × 6.5 (6, C1=6.5, C2=1.0) |
@@ -40,7 +40,7 @@ Pre-defined subclasses for common elements:
 
 ### Time Scaling
 
-Raw times on the wire are clock ticks. The card's `update_rate_hz` determines the tick period. Times are always presented in **microseconds**:
+Raw times on the wire are clock ticks. The card's `update_rate_hz` determines the tick period. Times in PACSys are always presented in **microseconds**:
 
 ```
 Forward:  time_us = raw_ticks * (1e6 / update_rate_hz)
@@ -55,7 +55,7 @@ Different card types have different update rates:
 | 465/466 | CAMAC | 1 / 5 / 10 KHz | 1000 µs / 200 µs / 100 µs |
 | 473 | CAMAC | 100 KHz fixed | 10 µs |
 
-### Current time scaling presets
+Pre-defined subclasses time scaling:
 
 | Class | `update_rate_hz` | Tick Period | Max Time |
 |-------|-----------------|-------------|----------|
@@ -67,38 +67,18 @@ Different card types have different update rates:
 | `RecyclerSCRamp` | 100,000 Hz | 10 µs | (none) |
 | `RecyclerHVSQRamp` | 720 Hz | 1,389 µs | (none) |
 
-```python
-from pacsys import BoosterHVRamp
-
-ramp = BoosterHVRamp.read("B:HS23T", slot=0)
-print(ramp.values)  # float64 array, Amps
-print(ramp.times)   # float64 array, microseconds
-```
 
 ---
 
-## Context Manager (Recommended for one-off changes)
-
-The `modify()` context manager handles read-modify-write automatically:
-
-```python
-from pacsys import BoosterHVRamp
-
-with BoosterHVRamp.modify("B:HS23T", slot=1) as ramp:
-    ramp.values[0] += 1.0   # bump first point by 1 Amp
-```
-
-Ramp state is read on context entrance and changes are written on context exit; nothing is written if no changes were made or an exception occurs.
-
----
-
-## Manual Read/Write
+## Read/Write
 
 ```python
 from pacsys import BoosterHVRamp
 
 # Read - stores device and slot on the ramp
 ramp = BoosterHVRamp.read("B:HS23T", slot=0)
+print(ramp.values)  # float64 array, Amps
+print(ramp.times)   # float64 array, microseconds
 ramp.device  # "B:HS23T"
 ramp.slot    # 0
 
@@ -112,6 +92,21 @@ ramp.write()
 # Or write to a different device/slot
 ramp.write(device="B:HS24T", slot=1)
 ```
+
+---
+
+## Context Manager
+
+The `modify()` context manager handles read-modify-write automatically:
+
+```python
+from pacsys import BoosterHVRamp
+
+with BoosterHVRamp.modify("B:HS23T", slot=1) as ramp:
+    ramp.values[0] += 1.0   # bump first point by 1 Amp
+```
+
+Ramp state is read on context entrance and changes are written on context exit; nothing is written if no changes were made or an exception occurs.
 
 ---
 
@@ -269,7 +264,7 @@ Transforms can be nonlinear (e.g., polynomial, lookup table).
 
 ### Custom RampGroup
 
-Ramp groups are subclassed by providing the new base class without need to duplicate transform code.
+Ramp groups are subclassed by providing the base ramp class, without needing to duplicate transform code.
 
 ```python
 from pacsys.ramp import RampGroup
@@ -335,9 +330,9 @@ print(ramp)
 
 ## Ramp Card Hardware details
 
-### 453 Class CAMAC Cards (453) (Quad Ramp Controller)
+### C453 -- Quad Ramp Controller
 
-The 453 class CAMAC ramp card produces four output waveform in response to a TCLK event. There are 32 defined interrupt levels, each triggered by the OR of up to 8 TCLK events.
+The 453 class CAMAC ramp card produces four output waveforms in response to a TCLK event. There are 32 defined interrupt levels, each triggered by the OR of up to 8 TCLK events.
 
 For each interrupt level the output waveform is:
 
@@ -349,12 +344,12 @@ Where:
 
 - **sf1, sf2, sf3** -- scale factors (-128 to +127.9)
 - **m1, m2, m3** -- raw MDAT readings / 256
-- **F(t)** -- interpolated function of time which is initiated by the 'or' of up to 8 TCLK events(the ramp table `Ramp` manipulates)
+- **F(t)** -- interpolated function of time which is initiated by the 'or' of up to 8 TCLK events (the ramp table `Ramp` manipulates)
 - **g(M1), h(M2)** -- interpolated functions of selected MDAT parameters
 
 Update frequency is 720Hz. Up to 15 ramp slots can be defined. The outputs are 12 bits +/- 10.000V. See references for more details.
 
-### 465 Class CAMAC Cards (453/465/466) (Waveform Generator)
+### C465/C466 -- Waveform Generator
 
 The 465 class CAMAC ramp card produces a single output waveform in response to a TCLK event. There are 32 defined interrupt levels, each triggered by the OR of up to 8 TCLK events.
 
@@ -368,14 +363,14 @@ Where:
 
 - **sf1, sf2, sf3** -- scale factors (-128 to +127.9 bipolar, 0 to +255.9 unipolar)
 - **m1, m2, m3** -- raw MDAT readings / 256
-- **F(t)** -- interpolated function of time which is initiated by the 'or' of up to 8 TCLK events(the ramp table `Ramp` manipulates)
+- **F(t)** -- interpolated function of time which is initiated by the 'or' of up to 8 TCLK events (the ramp table `Ramp` manipulates)
 - **g(M1), h(M2)** -- interpolated functions of selected MDAT parameters
 
 Update frequency is configurable between 1/5/10 kHz. Up to 15 ramp slots can be defined. The outputs are (16 bits, +/- 10.0V) (C465 and C467) and (16 bits, 0 - 10.0V) (C466 and C468). There are also differences in status reporting. See references for more details.
 
-### 473 Class CAMAC Cards (473/475) (Quad Ramp Controller)
+### C473/C475 -- Quad Ramp Controller
 
-The 473 CAMAC ramp card is used by Booster correctors. It has a fixed 100 KHz update rate (10 µs tick period).
+The 473 CAMAC ramp card has a fixed 100 KHz update rate (10 µs tick period).
 
 The output waveform is:
 
