@@ -406,6 +406,35 @@ class FakeBackend(Backend):
     # Configuration Methods (call these in test setup)
     # ─────────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _validate_value_type(value: Any, value_type: ValueType) -> None:
+        """Validate that value matches the declared ValueType.
+
+        Raises TypeError on mismatch so tests fail loudly at setup time
+        rather than silently accepting nonsense.
+        """
+        import numpy as np
+
+        checks: dict[ValueType, tuple[type | tuple[type, ...], str]] = {
+            ValueType.RAW: ((bytes, bytearray), "bytes/bytearray"),
+            ValueType.TEXT: ((str,), "str"),
+            ValueType.TEXT_ARRAY: ((list,), "list of str"),
+            ValueType.SCALAR: ((int, float, np.integer, np.floating, bool), "numeric (int/float)"),
+            ValueType.SCALAR_ARRAY: ((list, tuple, np.ndarray), "array-like (list/tuple/ndarray)"),
+            ValueType.TIMED_SCALAR_ARRAY: ((list, tuple, np.ndarray), "array-like (list/tuple/ndarray)"),
+            ValueType.ANALOG_ALARM: ((dict,), "dict"),
+            ValueType.DIGITAL_ALARM: ((dict,), "dict"),
+            ValueType.BASIC_STATUS: ((dict,), "dict"),
+        }
+        if value_type not in checks:
+            return
+        allowed_types, label = checks[value_type]
+        if not isinstance(value, allowed_types):
+            raise TypeError(
+                f"FakeBackend: value {type(value).__name__} incompatible with "
+                f"ValueType.{value_type.name} (expected {label})"
+            )
+
     def set_reading(
         self,
         drf: str,
@@ -426,7 +455,11 @@ class FakeBackend(Backend):
             description: Optional device description
             timestamp: Optional timestamp for the reading
             cycle: Cycle number (None if not available)
+
+        Raises:
+            TypeError: If value type doesn't match value_type declaration
         """
+        self._validate_value_type(value, value_type)
         device_name = get_device_name(drf)
 
         meta = DeviceMeta(
@@ -882,6 +915,7 @@ class FakeBackend(Backend):
             timestamp: Optional timestamp (default: now)
             cycle: Cycle number (None if not available)
         """
+        self._validate_value_type(value, value_type)
         device_name = get_device_name(drf)
         meta = DeviceMeta(
             device_index=0,

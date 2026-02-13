@@ -4,6 +4,7 @@ import struct
 
 import pytest
 
+from pacsys.types import ValueType
 from pacsys.alarm_block import (
     AlarmFlags,
     AnalogAlarm,
@@ -262,7 +263,7 @@ class TestModifyContext:
         }
 
         # Note: modify() requests with @I event suffix
-        fake_backend.set_reading("Z:TEST.ANALOG{0:20}.RAW@I", raw_bytes)
+        fake_backend.set_reading("Z:TEST.ANALOG{0:20}.RAW@I", raw_bytes, value_type=ValueType.RAW)
         fake_backend.set_analog_alarm("Z:TEST.ANALOG@I", structured)
 
         with AnalogAlarm.modify("Z:TEST", backend=fake_backend) as alarm:
@@ -287,7 +288,7 @@ class TestModifyContext:
             "tries_now": 0,
         }
 
-        fake_backend.set_reading("Z:TEST.ANALOG{0:20}.RAW@I", raw_bytes)
+        fake_backend.set_reading("Z:TEST.ANALOG{0:20}.RAW@I", raw_bytes, value_type=ValueType.RAW)
         fake_backend.set_analog_alarm("Z:TEST.ANALOG@I", structured)
 
         with AnalogAlarm.modify("Z:TEST", backend=fake_backend) as alarm:
@@ -318,7 +319,7 @@ class TestModifyContext:
             "tries_now": 0,
         }
 
-        fake_backend.set_reading("Z:TEST.ANALOG{0:20}.RAW@I", raw_bytes)
+        fake_backend.set_reading("Z:TEST.ANALOG{0:20}.RAW@I", raw_bytes, value_type=ValueType.RAW)
         fake_backend.set_analog_alarm("Z:TEST.ANALOG@I", structured)
 
         with AnalogAlarm.modify("Z:TEST", backend=fake_backend) as alarm:
@@ -347,7 +348,7 @@ class TestModifyContext:
             "tries_now": 0,
         }
 
-        fake_backend.set_reading("Z:TEST.ANALOG{0:20}.RAW@I", raw_bytes)
+        fake_backend.set_reading("Z:TEST.ANALOG{0:20}.RAW@I", raw_bytes, value_type=ValueType.RAW)
         fake_backend.set_analog_alarm("Z:TEST.ANALOG@I", structured)
 
         with AnalogAlarm.modify("Z:TEST", backend=fake_backend) as _alarm:

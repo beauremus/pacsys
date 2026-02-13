@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from pacsys.errors import DeviceError
+from pacsys.types import ValueType
 from pacsys.ramp import (
     BoosterHVRamp,
     BoosterHVRampGroup,
@@ -532,7 +533,7 @@ def _setup_devices(fake_backend, devices=None, slot=0):
         ramp_bytes = _make_ramp_bytes([(val, time)])
         # Pad front so the ramp data sits at the correct slot offset
         buf = b"\x00" * (slot * slot_bytes) + ramp_bytes
-        fake_backend.set_reading(f"{dev}.SETTING.RAW@I", buf)
+        fake_backend.set_reading(f"{dev}.SETTING.RAW@I", buf, value_type=ValueType.RAW)
 
 
 class TestRampDeviceSlot:
@@ -948,7 +949,7 @@ class TestRampGroupModify:
 class TestBoosterHVRampGroup:
     def test_read_returns_correct_type(self, fake_backend):
         for dev in ["B:HS23T", "B:HS24T"]:
-            fake_backend.set_reading(f"{dev}.SETTING.RAW@I", b"\x00" * 256)
+            fake_backend.set_reading(f"{dev}.SETTING.RAW@I", b"\x00" * 256, value_type=ValueType.RAW)
         group = BoosterHVRampGroup.read(["B:HS23T", "B:HS24T"], backend=fake_backend)
         assert isinstance(group, BoosterHVRampGroup)
         assert isinstance(group["B:HS23T"], BoosterHVRamp)

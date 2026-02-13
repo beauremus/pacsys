@@ -22,12 +22,14 @@ from pacsys.dpm_protocol import (
     Authenticate_reply,
     DeviceInfo_reply,
     OpenList_reply,
+    ProtocolError,
     Scalar_reply,
     ScalarArray_reply,
     SettingStatus_struct,
     StartList_reply,
     Status_reply,
     Text_reply,
+    unmarshal_request,
 )
 from pacsys.types import ValueType
 
@@ -186,6 +188,7 @@ class MockSocketWithReplies:
         self._connected = False
         self._closed = False
         self._timeout = None
+        self.sent_data = bytearray()
 
         # Build initial OpenList frame
         self._recv_buffer.extend(create_openlist_frame(list_id))
@@ -212,9 +215,10 @@ class MockSocketWithReplies:
         pass
 
     def sendall(self, data):
-        """Simulate send (no-op, but raises if closed)."""
+        """Capture sent data for later assertion."""
         if self._closed:
             raise BrokenPipeError("Socket closed")
+        self.sent_data.extend(data)
 
     def recv(self, bufsize):
         """Receive next chunk of data.
@@ -238,6 +242,39 @@ class MockSocketWithReplies:
         chunk = bytes(self._recv_buffer[:bufsize])
         self._recv_buffer = self._recv_buffer[bufsize:]
         return chunk
+
+    def get_sent_requests(self) -> list:
+        """Parse all sent data into DPM protocol request objects.
+
+        Returns a list of unmarshaled request objects (AddToList_request,
+        StartList_request, etc.) extracted from the captured send buffer.
+        Silently stops on parse errors (partial trailing data is normal).
+        """
+        requests = []
+        buf = bytes(self.sent_data)
+        pos = 0
+        while pos + 4 <= len(buf):
+            length = struct.unpack(">I", buf[pos : pos + 4])[0]
+            pos += 4
+            if pos + length > len(buf):
+                break
+            frame = buf[pos : pos + length]
+            pos += length
+            try:
+                requests.append(unmarshal_request(iter(frame)))
+            except (ProtocolError, StopIteration):
+                pass
+        return requests
+
+    def get_sent_drfs(self) -> list[str]:
+        """Extract DRF strings from all AddToList requests sent.
+
+        Convenience for the common assertion: "did the backend request
+        the right devices?"
+        """
+        from pacsys.dpm_protocol import AddToList_request
+
+        return [r.drf_request for r in self.get_sent_requests() if isinstance(r, AddToList_request)]
 
 
 # =============================================================================

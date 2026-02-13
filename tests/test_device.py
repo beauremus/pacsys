@@ -20,6 +20,7 @@ import numpy as np
 
 from pacsys.device import Device, ScalarDevice, ArrayDevice, TextDevice
 from pacsys.errors import DeviceError
+from pacsys.testing import FakeBackend
 from pacsys.types import Reading, ValueType, WriteResult, BasicControl
 from pacsys.verify import Verify
 
@@ -28,8 +29,14 @@ from pacsys.verify import Verify
 
 
 @pytest.fixture
+def fake():
+    """FakeBackend with DRF validation — catches malformed DRF strings."""
+    return FakeBackend()
+
+
+@pytest.fixture
 def mock_backend():
-    """Create a mock backend for testing."""
+    """MagicMock backend — only for tests needing side_effect sequences."""
     backend = mock.MagicMock()
     backend.read.return_value = 72.5
     backend.get.return_value = Reading(
@@ -81,17 +88,17 @@ class TestDeviceImmutability:
         assert original.request.range is None
         assert original is not modified
 
-    def test_with_backend_returns_new_device(self, mock_backend):
+    def test_with_backend_returns_new_device(self, fake):
         original = Device("M:OUTTMP")
-        modified = original.with_backend(mock_backend)
-        assert modified._backend is mock_backend
+        modified = original.with_backend(fake)
+        assert modified._backend is fake
         assert original._backend is None
         assert original is not modified
 
-    def test_chained_modifications(self, mock_backend):
-        dev = Device("M:OUTTMP").with_event("p,1000").with_backend(mock_backend)
+    def test_chained_modifications(self, fake):
+        dev = Device("M:OUTTMP").with_event("p,1000").with_backend(fake)
         assert dev.is_periodic
-        assert dev._backend is mock_backend
+        assert dev._backend is fake
 
     def test_with_event_replaces_existing_event(self):
         dev = Device("M:OUTTMP@p,1000")
@@ -104,64 +111,69 @@ class TestDeviceImmutability:
 
 
 class TestDeviceReadOperations:
-    """Tests for Device read and get operations."""
+    """Tests for Device read and get operations — uses FakeBackend for DRF validation."""
 
-    def test_read_delegates_to_backend(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_read_delegates_to_backend(self, fake):
+        fake.set_reading("M:OUTTMP.READING", 72.5)
+        dev = Device("M:OUTTMP", backend=fake)
         result = dev.read()
         assert result == 72.5
-        mock_backend.read.assert_called_once()
+        assert len(fake.reads) == 1
 
-    def test_get_delegates_to_backend(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_get_delegates_to_backend(self, fake):
+        fake.set_reading("M:OUTTMP.READING", 72.5)
+        dev = Device("M:OUTTMP", backend=fake)
         result = dev.get()
         assert result.value == 72.5
-        mock_backend.get.assert_called_once()
+        assert len(fake.reads) == 1
 
-    def test_get_with_prop_builds_drf(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_get_with_prop_builds_drf(self, fake):
+        fake.set_reading("M:OUTTMP.SETTING", 72.5)
+        dev = Device("M:OUTTMP", backend=fake)
         dev.get(prop="setting")
-        drf = mock_backend.get.call_args[0][0]
+        drf = fake.reads[-1]
         assert ".SETTING" in drf
         assert "@I" in drf
 
-    def test_get_with_prop_and_field(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_get_with_prop_and_field(self, fake):
+        fake.set_reading("M:OUTTMP.STATUS.ON", True)
+        dev = Device("M:OUTTMP", backend=fake)
         dev.get(prop="status", field="on")
-        drf = mock_backend.get.call_args[0][0]
+        drf = fake.reads[-1]
         assert ".STATUS" in drf
         assert ".ON" in drf
         assert "@I" in drf
 
-    def test_get_with_field_but_no_prop_raises(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_get_with_field_but_no_prop_raises(self, fake):
+        dev = Device("M:OUTTMP", backend=fake)
         with pytest.raises(ValueError, match="field requires prop"):
             dev.get(field="raw")
 
-    def test_get_with_prop_preserves_range(self, mock_backend):
-        dev = Device("M:OUTTMP[0:10]", backend=mock_backend)
+    def test_get_with_prop_preserves_range(self, fake):
+        fake.set_reading("M:OUTTMP.SETTING", list(range(20)), value_type=ValueType.SCALAR_ARRAY)
+        dev = Device("M:OUTTMP[0:10]", backend=fake)
         dev.get(prop="setting")
-        drf = mock_backend.get.call_args[0][0]
+        drf = fake.reads[-1]
         assert "[0:10]" in drf
         assert ".SETTING" in drf
 
-    def test_get_with_invalid_prop_raises(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_get_with_invalid_prop_raises(self, fake):
+        dev = Device("M:OUTTMP", backend=fake)
         with pytest.raises(KeyError):
             dev.get(prop="nonexistent")
 
-    def test_read_with_timeout(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
-        dev.read(timeout=5.0)
-        called_drf = mock_backend.read.call_args[0][0]
-        called_timeout = mock_backend.read.call_args[0][1]
-        assert "M:OUTTMP" in called_drf
-        assert called_timeout == 5.0
+    def test_read_with_timeout(self, fake):
+        fake.set_reading("M:OUTTMP.READING", 72.5)
+        dev = Device("M:OUTTMP", backend=fake)
+        result = dev.read(timeout=5.0)
+        assert result == 72.5
+        assert "M:OUTTMP" in fake.reads[-1]
 
-    def test_read_uses_reading_property_and_immediate_event(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_read_uses_reading_property_and_immediate_event(self, fake):
+        fake.set_reading("M:OUTTMP.READING", 72.5)
+        dev = Device("M:OUTTMP", backend=fake)
         dev.read()
-        called_drf = mock_backend.read.call_args[0][0]
+        called_drf = fake.reads[-1]
         assert ".READING" in called_drf
         assert "@I" in called_drf
 
@@ -172,24 +184,30 @@ class TestDeviceReadOperations:
 class TestScalarDevice:
     """Tests for ScalarDevice."""
 
-    def test_scalar_device_returns_float(self, mock_backend):
-        mock_backend.read.return_value = 72.5
-        dev = ScalarDevice("M:OUTTMP", backend=mock_backend)
+    def test_scalar_device_returns_float(self, fake):
+        fake.set_reading("M:OUTTMP.READING", 72.5)
+        dev = ScalarDevice("M:OUTTMP", backend=fake)
         result = dev.read()
         assert isinstance(result, float)
         assert result == 72.5
 
-    def test_scalar_device_converts_int(self, mock_backend):
-        mock_backend.read.return_value = 42
-        dev = ScalarDevice("M:OUTTMP", backend=mock_backend)
+    def test_scalar_device_converts_int(self, fake):
+        fake.set_reading("M:OUTTMP.READING", 42)
+        dev = ScalarDevice("M:OUTTMP", backend=fake)
         result = dev.read()
         assert isinstance(result, float)
         assert result == 42.0
 
-    @pytest.mark.parametrize("bad_value", [np.array([1, 2, 3]), "text"])
-    def test_scalar_device_raises_on_wrong_type(self, mock_backend, bad_value):
-        mock_backend.read.return_value = bad_value
-        dev = ScalarDevice("M:OUTTMP", backend=mock_backend)
+    @pytest.mark.parametrize(
+        "bad_value,vtype",
+        [
+            (np.array([1, 2, 3]), ValueType.SCALAR_ARRAY),
+            ("text", ValueType.TEXT),
+        ],
+    )
+    def test_scalar_device_raises_on_wrong_type(self, fake, bad_value, vtype):
+        fake.set_reading("M:OUTTMP.READING", bad_value, value_type=vtype)
+        dev = ScalarDevice("M:OUTTMP", backend=fake)
         with pytest.raises(TypeError, match="Expected scalar"):
             dev.read()
 
@@ -200,31 +218,37 @@ class TestScalarDevice:
 class TestArrayDevice:
     """Tests for ArrayDevice."""
 
-    def test_array_device_returns_ndarray(self, mock_backend):
-        mock_backend.read.return_value = np.array([1.0, 2.0, 3.0])
-        dev = ArrayDevice("B:HS23T[0:10]", backend=mock_backend)
+    def test_array_device_returns_ndarray(self, fake):
+        fake.set_reading("B:HS23T.READING", np.array([1.0, 2.0, 3.0]), value_type=ValueType.SCALAR_ARRAY)
+        dev = ArrayDevice("B:HS23T[0:10]", backend=fake)
         result = dev.read()
         assert isinstance(result, np.ndarray)
         assert list(result) == [1.0, 2.0, 3.0]
 
-    def test_array_device_converts_list(self, mock_backend):
-        mock_backend.read.return_value = [1.0, 2.0, 3.0]
-        dev = ArrayDevice("B:HS23T[0:10]", backend=mock_backend)
+    def test_array_device_converts_list(self, fake):
+        fake.set_reading("B:HS23T.READING", [1.0, 2.0, 3.0], value_type=ValueType.SCALAR_ARRAY)
+        dev = ArrayDevice("B:HS23T[0:10]", backend=fake)
         result = dev.read()
         assert isinstance(result, np.ndarray)
         assert list(result) == [1.0, 2.0, 3.0]
 
-    def test_array_device_converts_tuple(self, mock_backend):
-        mock_backend.read.return_value = (1.0, 2.0, 3.0)
-        dev = ArrayDevice("B:HS23T[0:10]", backend=mock_backend)
+    def test_array_device_converts_tuple(self, fake):
+        fake.set_reading("B:HS23T.READING", (1.0, 2.0, 3.0), value_type=ValueType.SCALAR_ARRAY)
+        dev = ArrayDevice("B:HS23T[0:10]", backend=fake)
         result = dev.read()
         assert isinstance(result, np.ndarray)
         assert list(result) == [1.0, 2.0, 3.0]
 
-    @pytest.mark.parametrize("bad_value", [72.5, "text"])
-    def test_array_device_raises_on_wrong_type(self, mock_backend, bad_value):
-        mock_backend.read.return_value = bad_value
-        dev = ArrayDevice("B:HS23T[0:10]", backend=mock_backend)
+    @pytest.mark.parametrize(
+        "bad_value,vtype",
+        [
+            (72.5, ValueType.SCALAR),
+            ("text", ValueType.TEXT),
+        ],
+    )
+    def test_array_device_raises_on_wrong_type(self, fake, bad_value, vtype):
+        fake.set_reading("B:HS23T.READING", bad_value, value_type=vtype)
+        dev = ArrayDevice("B:HS23T", backend=fake)  # No range — tests type check, not range
         with pytest.raises(TypeError, match="Expected array"):
             dev.read()
 
@@ -235,17 +259,23 @@ class TestArrayDevice:
 class TestTextDevice:
     """Tests for TextDevice."""
 
-    def test_text_device_returns_string(self, mock_backend):
-        mock_backend.read.return_value = "some text"
-        dev = TextDevice("M:OUTTMP.DESCRIPTION", backend=mock_backend)
+    def test_text_device_returns_string(self, fake):
+        fake.set_reading("M:OUTTMP.READING", "some text", value_type=ValueType.TEXT)
+        dev = TextDevice("M:OUTTMP", backend=fake)
         result = dev.read()
         assert isinstance(result, str)
         assert result == "some text"
 
-    @pytest.mark.parametrize("bad_value", [72.5, np.array([1, 2, 3])])
-    def test_text_device_raises_on_wrong_type(self, mock_backend, bad_value):
-        mock_backend.read.return_value = bad_value
-        dev = TextDevice("M:OUTTMP.DESCRIPTION", backend=mock_backend)
+    @pytest.mark.parametrize(
+        "bad_value,vtype",
+        [
+            (72.5, ValueType.SCALAR),
+            (np.array([1, 2, 3]), ValueType.SCALAR_ARRAY),
+        ],
+    )
+    def test_text_device_raises_on_wrong_type(self, fake, bad_value, vtype):
+        fake.set_reading("M:OUTTMP.READING", bad_value, value_type=vtype)
+        dev = TextDevice("M:OUTTMP", backend=fake)
         with pytest.raises(TypeError, match="Expected string"):
             dev.read()
 
@@ -256,17 +286,17 @@ class TestTextDevice:
 class TestSubclassPreservation:
     """Tests that modification methods preserve the Device subclass."""
 
-    def test_scalar_device_with_event_returns_scalar_device(self, mock_backend):
+    def test_scalar_device_with_event_returns_scalar_device(self):
         dev = ScalarDevice("M:OUTTMP")
         modified = dev.with_event("p,1000")
         assert isinstance(modified, ScalarDevice)
 
-    def test_scalar_device_with_backend_returns_scalar_device(self, mock_backend):
+    def test_scalar_device_with_backend_returns_scalar_device(self, fake):
         dev = ScalarDevice("M:OUTTMP")
-        modified = dev.with_backend(mock_backend)
+        modified = dev.with_backend(fake)
         assert isinstance(modified, ScalarDevice)
 
-    def test_array_device_with_range_returns_array_device(self, mock_backend):
+    def test_array_device_with_range_returns_array_device(self):
         dev = ArrayDevice("B:HS23T")
         modified = dev.with_range(0, 10)
         assert isinstance(modified, ArrayDevice)
@@ -293,115 +323,126 @@ class TestEdgeCases:
 
 
 class TestDeviceReadMethods:
-    """Tests for property-specific read methods."""
+    """Tests for property-specific read methods — FakeBackend validates all DRFs."""
 
-    def test_read_default_field(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_read_default_field(self, fake):
+        fake.set_reading("M:OUTTMP.READING", 72.5)
+        dev = Device("M:OUTTMP", backend=fake)
         dev.read()
-        drf = mock_backend.read.call_args[0][0]
+        drf = fake.reads[-1]
         assert ".READING" in drf
         assert "@I" in drf
 
-    def test_read_raw_field(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_read_raw_field(self, fake):
+        fake.set_reading("M:OUTTMP.READING.RAW", b"\x00\x01", value_type=ValueType.RAW)
+        dev = Device("M:OUTTMP", backend=fake)
         dev.read(field="raw")
-        drf = mock_backend.read.call_args[0][0]
+        drf = fake.reads[-1]
         assert ".READING" in drf
         assert ".RAW" in drf
         assert "@I" in drf
 
-    def test_setting_default(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_setting_default(self, fake):
+        fake.set_reading("M:OUTTMP.SETTING", 72.5)
+        dev = Device("M:OUTTMP", backend=fake)
         dev.setting()
-        drf = mock_backend.read.call_args[0][0]
+        drf = fake.reads[-1]
         assert ".SETTING" in drf
         assert "@I" in drf
 
-    def test_setting_raw_field(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_setting_raw_field(self, fake):
+        fake.set_reading("M:OUTTMP.SETTING.RAW", b"\x00\x01", value_type=ValueType.RAW)
+        dev = Device("M:OUTTMP", backend=fake)
         dev.setting(field="raw")
-        drf = mock_backend.read.call_args[0][0]
+        drf = fake.reads[-1]
         assert ".SETTING" in drf
         assert ".RAW" in drf
 
-    def test_status_default(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_status_default(self, fake):
+        fake.set_reading("M:OUTTMP.STATUS", 0)
+        dev = Device("M:OUTTMP", backend=fake)
         dev.status()
-        drf = mock_backend.read.call_args[0][0]
+        drf = fake.reads[-1]
         assert ".STATUS" in drf
         assert "@I" in drf
 
-    def test_status_on_field(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_status_on_field(self, fake):
+        fake.set_reading("M:OUTTMP.STATUS.ON", True)
+        dev = Device("M:OUTTMP", backend=fake)
         dev.status(field="on")
-        drf = mock_backend.read.call_args[0][0]
+        drf = fake.reads[-1]
         assert ".STATUS" in drf
         assert ".ON" in drf
 
-    def test_analog_alarm_default(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_analog_alarm_default(self, fake):
+        fake.set_reading("M:OUTTMP.ANALOG", {"minimum": 0.0, "maximum": 100.0}, value_type=ValueType.ANALOG_ALARM)
+        dev = Device("M:OUTTMP", backend=fake)
         dev.analog_alarm()
-        drf = mock_backend.read.call_args[0][0]
+        drf = fake.reads[-1]
         assert ".ANALOG" in drf
         assert "@I" in drf
 
-    def test_analog_alarm_min_field(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_analog_alarm_min_field(self, fake):
+        fake.set_reading("M:OUTTMP.ANALOG.MIN", 0.0)
+        dev = Device("M:OUTTMP", backend=fake)
         dev.analog_alarm(field="min")
-        drf = mock_backend.read.call_args[0][0]
+        drf = fake.reads[-1]
         assert ".ANALOG" in drf
         assert ".MIN" in drf
 
-    def test_digital_alarm_default(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_digital_alarm_default(self, fake):
+        fake.set_reading("M:OUTTMP.DIGITAL", {"nominal": 0, "mask": 0xFF}, value_type=ValueType.DIGITAL_ALARM)
+        dev = Device("M:OUTTMP", backend=fake)
         dev.digital_alarm()
-        drf = mock_backend.read.call_args[0][0]
+        drf = fake.reads[-1]
         assert ".DIGITAL" in drf
         assert "@I" in drf
 
-    def test_description(self, mock_backend):
-        mock_backend.read.return_value = "Outside temperature"
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_description(self, fake):
+        fake.set_reading("M:OUTTMP.DESCRIPTION", "Outside temperature", value_type=ValueType.TEXT)
+        dev = Device("M:OUTTMP", backend=fake)
         result = dev.description()
         assert result == "Outside temperature"
-        drf = mock_backend.read.call_args[0][0]
+        drf = fake.reads[-1]
         assert ".DESCRIPTION" in drf
 
-    def test_read_preserves_range(self, mock_backend):
-        dev = Device("B:HS23T[0:10]", backend=mock_backend)
+    def test_read_preserves_range(self, fake):
+        fake.set_reading("B:HS23T.READING", list(range(20)), value_type=ValueType.SCALAR_ARRAY)
+        dev = Device("B:HS23T[0:10]", backend=fake)
         dev.read()
-        drf = mock_backend.read.call_args[0][0]
+        drf = fake.reads[-1]
         assert "[0:10]" in drf
         assert ".READING" in drf
 
-    def test_setting_preserves_range(self, mock_backend):
-        dev = Device("B:HS23T[0:10]", backend=mock_backend)
+    def test_setting_preserves_range(self, fake):
+        fake.set_reading("B:HS23T.SETTING", list(range(20)), value_type=ValueType.SCALAR_ARRAY)
+        dev = Device("B:HS23T[0:10]", backend=fake)
         dev.setting()
-        drf = mock_backend.read.call_args[0][0]
+        drf = fake.reads[-1]
         assert "[0:10]" in drf
         assert ".SETTING" in drf
 
 
 class TestDeviceFieldValidation:
-    """Tests that invalid fields raise ValueError."""
+    """Tests that invalid fields raise ValueError (before backend call)."""
 
-    def test_invalid_field_for_reading(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_invalid_field_for_reading(self, fake):
+        dev = Device("M:OUTTMP", backend=fake)
         with pytest.raises(ValueError, match="not allowed"):
             dev.read(field="on")  # ON is a STATUS field, not READING
 
-    def test_invalid_field_for_status(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_invalid_field_for_status(self, fake):
+        dev = Device("M:OUTTMP", backend=fake)
         with pytest.raises(ValueError, match="not allowed"):
             dev.status(field="primary")  # PRIMARY is a READING field, not STATUS
 
-    def test_invalid_field_for_setting(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_invalid_field_for_setting(self, fake):
+        dev = Device("M:OUTTMP", backend=fake)
         with pytest.raises(ValueError, match="not allowed"):
             dev.setting(field="on")
 
-    def test_unknown_field_name(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_unknown_field_name(self, fake):
+        dev = Device("M:OUTTMP", backend=fake)
         with pytest.raises(ValueError):
             dev.read(field="nonexistent")
 
@@ -410,31 +451,31 @@ class TestDeviceFieldValidation:
 
 
 class TestDeviceWriteMethods:
-    """Tests for Device write methods."""
+    """Tests for Device write methods — FakeBackend validates DRF and records writes."""
 
-    def test_write_basic(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_write_basic(self, fake):
+        fake.set_reading("M:OUTTMP.SETTING", 0.0)
+        dev = Device("M:OUTTMP", backend=fake)
         result = dev.write(72.5)
         assert result.success
-        drf = mock_backend.write.call_args[0][0]
-        value = mock_backend.write.call_args[0][1]
+        drf, value = fake.writes[-1]
         assert ".SETTING" in drf
         assert "@N" in drf
         assert value == 72.5
 
-    def test_write_raw_field(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_write_raw_field(self, fake):
+        fake.set_reading("M:OUTTMP.SETTING.RAW", b"\x00", value_type=ValueType.RAW)
+        dev = Device("M:OUTTMP", backend=fake)
         dev.write(100, field="raw")
-        drf = mock_backend.write.call_args[0][0]
+        drf, _ = fake.writes[-1]
         assert ".SETTING" in drf
         assert ".RAW" in drf
         assert "@N" in drf
 
-    def test_control_on(self, mock_backend):
-        dev = Device("Z:ACLTST", backend=mock_backend)
+    def test_control_on(self, fake):
+        dev = Device("Z:ACLTST", backend=fake)
         dev.control(BasicControl.ON)
-        drf = mock_backend.write.call_args[0][0]
-        value = mock_backend.write.call_args[0][1]
+        drf, value = fake.writes[-1]
         assert ".CONTROL" in drf
         assert "@N" in drf
         assert value == BasicControl.ON
@@ -454,15 +495,15 @@ class TestDeviceWriteMethods:
             ("trip", BasicControl.TRIP),
         ],
     )
-    def test_control_shortcut(self, mock_backend, method, expected):
+    def test_control_shortcut(self, fake, method, expected):
         """Control shortcuts delegate to control() with correct command."""
-        dev = Device("Z:ACLTST", backend=mock_backend)
+        dev = Device("Z:ACLTST", backend=fake)
         getattr(dev, method)()
-        assert mock_backend.write.call_args[0][1] == expected
+        assert fake.writes[-1][1] == expected
 
-    def test_write_failed_returns_result(self, mock_backend):
-        mock_backend.write.return_value = WriteResult(drf="M:OUTTMP.SETTING@N", error_code=-1, message="Fail")
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_write_failed_returns_result(self, fake):
+        fake.set_write_result("M:OUTTMP.SETTING", success=False, error_code=-1, message="Fail")
+        dev = Device("M:OUTTMP", backend=fake)
         result = dev.write(72.5)
         assert not result.success
         assert result.error_code == -1
@@ -474,28 +515,28 @@ class TestDeviceWriteMethods:
 class TestDeviceAlarmSetters:
     """Tests for alarm setter methods."""
 
-    def test_set_analog_alarm(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_set_analog_alarm(self, fake):
+        dev = Device("M:OUTTMP", backend=fake)
         settings = {"minimum": 40, "maximum": 80}
         dev.set_analog_alarm(settings)
-        drf = mock_backend.write.call_args[0][0]
-        value = mock_backend.write.call_args[0][1]
+        drf, value = fake.writes[-1]
         assert ".ANALOG" in drf
         assert "@N" in drf
         assert value == settings
 
-    def test_set_digital_alarm(self, mock_backend):
-        dev = Device("M:OUTTMP", backend=mock_backend)
+    def test_set_digital_alarm(self, fake):
+        dev = Device("M:OUTTMP", backend=fake)
         settings = {"nominal": 0x01, "mask": 0xFF}
         dev.set_digital_alarm(settings)
-        drf = mock_backend.write.call_args[0][0]
-        value = mock_backend.write.call_args[0][1]
+        drf, value = fake.writes[-1]
         assert ".DIGITAL" in drf
         assert "@N" in drf
         assert value == settings
 
 
 # ─── Verify flow tests ─────────────────────────────────────────────────
+# These tests need side_effect sequences and assert_not_called, so they
+# use MagicMock — they test orchestration logic, not DRF construction.
 
 
 class TestDeviceVerify:
@@ -545,21 +586,21 @@ class TestDeviceVerify:
         assert result.verified is True
         assert not result.skipped
 
-    def test_write_no_verify_returns_plain_result(self, mock_backend):
+    def test_write_no_verify_returns_plain_result(self, fake):
         """Without verify, no readback occurs."""
-        dev = Device("M:OUTTMP", backend=mock_backend)
+        dev = Device("M:OUTTMP", backend=fake)
         result = dev.write(72.5)
         assert result.verified is None
         assert result.readback is None
         assert result.skipped is False
-        assert mock_backend.read.call_count == 0
+        assert len(fake.reads) == 0
 
-    def test_write_verify_false_no_readback(self, mock_backend):
+    def test_write_verify_false_no_readback(self, fake):
         """verify=False explicitly disables verification."""
-        dev = Device("M:OUTTMP", backend=mock_backend)
+        dev = Device("M:OUTTMP", backend=fake)
         result = dev.write(72.5, verify=False)
         assert result.verified is None
-        assert mock_backend.read.call_count == 0
+        assert len(fake.reads) == 0
 
     def test_control_with_verify(self, mock_backend):
         """Control commands verify via STATUS read."""
@@ -580,27 +621,26 @@ class TestDeviceVerify:
         assert result.skipped is True
         mock_backend.write.assert_not_called()
 
-    def test_control_verify_unmapped_command_raises(self, mock_backend):
+    def test_control_verify_unmapped_command_raises(self, fake):
         """Verify raises ValueError for commands without a STATUS field mapping."""
-        dev = Device("Z:ACLTST", backend=mock_backend)
+        dev = Device("Z:ACLTST", backend=fake)
         with pytest.raises(ValueError, match="no STATUS field mapping"):
             dev.control(99, verify=True)
 
-    def test_control_no_verify_unmapped_command_succeeds(self, mock_backend):
+    def test_control_no_verify_unmapped_command_succeeds(self, fake):
         """Unmapped commands work fine without verify."""
-        dev = Device("Z:ACLTST", backend=mock_backend)
+        dev = Device("Z:ACLTST", backend=fake)
         result = dev.control(99)
         assert result.verified is None
 
-    def test_write_failed_skips_verify(self, mock_backend):
+    def test_write_failed_skips_verify(self, fake):
         """If the write itself fails, no verify is attempted."""
-        mock_backend.write.return_value = WriteResult(drf="M:OUTTMP.SETTING@N", error_code=-1, message="Fail")
-        dev = Device("M:OUTTMP", backend=mock_backend)
+        fake.set_write_result("M:OUTTMP.SETTING", success=False, error_code=-1, message="Fail")
+        dev = Device("M:OUTTMP", backend=fake)
         result = dev.write(72.5, verify=Verify(initial_delay=0))
         assert result.error_code == -1
-        # verify fields should be from the raw result, not from readback
         assert result.verified is None
-        mock_backend.read.assert_not_called()
+        assert len(fake.reads) == 0
 
     def test_verify_context_always(self, mock_backend):
         """Verify context with always=True auto-verifies."""
@@ -623,29 +663,29 @@ class TestDeviceVerify:
 class TestDeviceExtra:
     """Tests for DRF extra modifier preservation (e.g., <-FTP)."""
 
-    def test_build_drf_preserves_ftp_extra_on_read(self, mock_backend):
+    def test_build_drf_preserves_ftp_extra_on_read(self, fake):
         """read() preserves <-FTP extra in the DRF passed to backend."""
-        mock_backend.read.return_value = 72.5
-        dev = Device("M:OUTTMP<-FTP", backend=mock_backend)
+        fake.set_reading("M:OUTTMP.READING<-FTP", 72.5)
+        dev = Device("M:OUTTMP<-FTP", backend=fake)
         dev.read()
-        drf = mock_backend.read.call_args[0][0]
+        drf = fake.reads[-1]
         assert drf.endswith("<-FTP")
         assert drf == "M:OUTTMP.READING@I<-FTP"
 
-    def test_build_drf_preserves_ftp_extra_on_write(self, mock_backend):
+    def test_build_drf_preserves_ftp_extra_on_write(self, fake):
         """write() preserves <-FTP extra in the DRF passed to backend."""
-        dev = Device("M:OUTTMP<-FTP", backend=mock_backend)
+        dev = Device("M:OUTTMP<-FTP", backend=fake)
         dev.write(72.5)
-        drf = mock_backend.write.call_args[0][0]
+        drf = fake.writes[-1][0]
         assert drf.endswith("<-FTP")
         assert drf == "M:OUTTMP.SETTING@N<-FTP"
 
-    def test_build_drf_preserves_ftp_extra_on_status(self, mock_backend):
+    def test_build_drf_preserves_ftp_extra_on_status(self, fake):
         """status() preserves <-FTP extra."""
-        mock_backend.read.return_value = True
-        dev = Device("M:OUTTMP<-FTP", backend=mock_backend)
+        fake.set_reading("M:OUTTMP.STATUS.ON<-FTP", True)
+        dev = Device("M:OUTTMP<-FTP", backend=fake)
         dev.status(field="on")
-        drf = mock_backend.read.call_args[0][0]
+        drf = fake.reads[-1]
         assert drf == "M:OUTTMP.STATUS.ON@I<-FTP"
 
     def test_digital_status_preserves_ftp_extra(self, mock_backend):
@@ -663,12 +703,12 @@ class TestDeviceExtra:
         for drf in drfs:
             assert drf.endswith("<-FTP"), f"{drf} missing <-FTP"
 
-    def test_no_extra_omits_suffix(self, mock_backend):
+    def test_no_extra_omits_suffix(self, fake):
         """Devices without extra don't get a spurious suffix."""
-        mock_backend.read.return_value = 72.5
-        dev = Device("M:OUTTMP", backend=mock_backend)
+        fake.set_reading("M:OUTTMP.READING", 72.5)
+        dev = Device("M:OUTTMP", backend=fake)
         dev.read()
-        drf = mock_backend.read.call_args[0][0]
+        drf = fake.reads[-1]
         assert "<-" not in drf
 
 

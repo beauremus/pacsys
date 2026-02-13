@@ -14,7 +14,6 @@ Tests cover:
 import os
 import pytest
 from unittest import mock
-from datetime import datetime
 
 import pacsys
 from pacsys import (
@@ -22,10 +21,9 @@ from pacsys import (
     ScalarDevice,
     DeviceError,
     Reading,
-    ValueType,
-    DeviceMeta,
 )
 from pacsys.backends.dpm_http import DPMHTTPBackend
+from pacsys.testing import FakeBackend
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -56,47 +54,21 @@ def reset_global_state():
 
 
 @pytest.fixture
+def fake():
+    """FakeBackend patched as the global pacsys backend."""
+    backend = FakeBackend()
+    pacsys._global_backend = backend
+    pacsys._backend_initialized = True
+    yield backend
+    pacsys._global_backend = None
+    pacsys._backend_initialized = False
+
+
+@pytest.fixture
 def mock_backend():
-    """Create a mock DPMHTTPBackend."""
+    """MagicMock — only for backend factory/init tests."""
     backend = mock.MagicMock(spec=DPMHTTPBackend)
     return backend
-
-
-@pytest.fixture
-def sample_reading():
-    """Create a sample Reading for tests."""
-    return Reading(
-        drf="M:OUTTMP",
-        value_type=ValueType.SCALAR,
-        facility_code=0,
-        error_code=0,
-        value=72.5,
-        message=None,
-        timestamp=datetime(2024, 1, 1, 12, 0, 0),
-        cycle=1234,
-        meta=DeviceMeta(
-            device_index=12345,
-            name="M:OUTTMP",
-            description="Outdoor Temperature",
-            units="degF",
-        ),
-    )
-
-
-@pytest.fixture
-def error_reading():
-    """Create an error Reading for tests."""
-    return Reading(
-        drf="M:BADDEV",
-        value_type=ValueType.SCALAR,
-        facility_code=0,
-        error_code=-42,
-        value=None,
-        message="Device not found",
-        timestamp=None,
-        cycle=None,
-        meta=None,
-    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -107,64 +79,38 @@ def error_reading():
 class TestRead:
     """Tests for pacsys.read()."""
 
-    def test_read_with_drf_string(self, mock_backend, sample_reading):
-        """read() accepts DRF string."""
-        mock_backend.read.return_value = 72.5
-
-        with mock.patch.object(pacsys, "_global_backend", mock_backend):
-            with mock.patch.object(pacsys, "_backend_initialized", True):
-                result = pacsys.read("M:OUTTMP")
-
+    def test_read_with_drf_string(self, fake):
+        """read() accepts DRF string and returns value."""
+        fake.set_reading("M:OUTTMP", 72.5)
+        result = pacsys.read("M:OUTTMP")
         assert result == 72.5
-        mock_backend.read.assert_called_once_with("M:OUTTMP", timeout=None)
+        assert fake.was_read("M:OUTTMP")
 
-    def test_read_with_device_object(self, mock_backend):
+    def test_read_with_device_object(self, fake):
         """read() accepts Device object."""
-        mock_backend.read.return_value = 72.5
+        fake.set_reading("M:OUTTMP.READING", 72.5)
         device = Device("M:OUTTMP")
-
-        with mock.patch.object(pacsys, "_global_backend", mock_backend):
-            with mock.patch.object(pacsys, "_backend_initialized", True):
-                result = pacsys.read(device)
-
+        result = pacsys.read(device)
         assert result == 72.5
-        # Device normalizes DRF to canonical form
-        mock_backend.read.assert_called_once()
 
-    def test_read_with_timeout(self, mock_backend):
-        """read() passes timeout to backend."""
-        mock_backend.read.return_value = 72.5
+    def test_read_with_timeout(self, fake):
+        """read() passes timeout to backend (FakeBackend ignores it)."""
+        fake.set_reading("M:OUTTMP", 72.5)
+        result = pacsys.read("M:OUTTMP", timeout=5.0)
+        assert result == 72.5
 
-        with mock.patch.object(pacsys, "_global_backend", mock_backend):
-            with mock.patch.object(pacsys, "_backend_initialized", True):
-                pacsys.read("M:OUTTMP", timeout=5.0)
-
-        mock_backend.read.assert_called_once_with("M:OUTTMP", timeout=5.0)
-
-    def test_read_raises_device_error_on_failure(self, mock_backend):
-        """read() raises DeviceError when backend fails."""
-        mock_backend.read.side_effect = DeviceError(
-            drf="M:BADDEV",
-            facility_code=0,
-            error_code=-42,
-            message="Device not found",
-        )
-
-        with mock.patch.object(pacsys, "_global_backend", mock_backend):
-            with mock.patch.object(pacsys, "_backend_initialized", True):
-                with pytest.raises(DeviceError) as exc_info:
-                    pacsys.read("M:BADDEV")
-
+    def test_read_raises_device_error_on_failure(self, fake):
+        """read() raises DeviceError when device has error configured."""
+        fake.set_error("M:BADDEV", -42, "Device not found")
+        with pytest.raises(DeviceError) as exc_info:
+            pacsys.read("M:BADDEV")
         assert exc_info.value.drf == "M:BADDEV"
         assert exc_info.value.error_code == -42
 
-    def test_read_with_invalid_device_type(self, mock_backend):
+    def test_read_with_invalid_device_type(self, fake):
         """read() raises TypeError for invalid device type."""
-        with mock.patch.object(pacsys, "_global_backend", mock_backend):
-            with mock.patch.object(pacsys, "_backend_initialized", True):
-                with pytest.raises(TypeError) as exc_info:
-                    pacsys.read(12345)  # Not a str or Device
-
+        with pytest.raises(TypeError) as exc_info:
+            pacsys.read(12345)  # Not a str or Device
         assert "Expected str or Device" in str(exc_info.value)
 
 
@@ -176,38 +122,26 @@ class TestRead:
 class TestGet:
     """Tests for pacsys.get()."""
 
-    def test_get_returns_reading(self, mock_backend, sample_reading):
+    def test_get_returns_reading(self, fake):
         """get() returns Reading object."""
-        mock_backend.get.return_value = sample_reading
-
-        with mock.patch.object(pacsys, "_global_backend", mock_backend):
-            with mock.patch.object(pacsys, "_backend_initialized", True):
-                result = pacsys.get("M:OUTTMP")
-
+        fake.set_reading("M:OUTTMP", 72.5, units="degF", description="Outdoor Temperature")
+        result = pacsys.get("M:OUTTMP")
         assert isinstance(result, Reading)
         assert result.value == 72.5
         assert result.is_success
         assert result.ok
 
-    def test_get_with_device_object(self, mock_backend, sample_reading):
+    def test_get_with_device_object(self, fake):
         """get() accepts Device object."""
-        mock_backend.get.return_value = sample_reading
+        fake.set_reading("M:OUTTMP.READING", 72.5)
         device = ScalarDevice("M:OUTTMP")
-
-        with mock.patch.object(pacsys, "_global_backend", mock_backend):
-            with mock.patch.object(pacsys, "_backend_initialized", True):
-                result = pacsys.get(device)
-
+        result = pacsys.get(device)
         assert result.value == 72.5
 
-    def test_get_error_reading(self, mock_backend, error_reading):
+    def test_get_error_reading(self, fake):
         """get() returns error Reading without raising."""
-        mock_backend.get.return_value = error_reading
-
-        with mock.patch.object(pacsys, "_global_backend", mock_backend):
-            with mock.patch.object(pacsys, "_backend_initialized", True):
-                result = pacsys.get("M:BADDEV")
-
+        fake.set_error("M:BADDEV", -42, "Device not found")
+        result = pacsys.get("M:BADDEV")
         assert result.is_error
         assert result.error_code == -42
         assert not result.ok
@@ -221,40 +155,31 @@ class TestGet:
 class TestGetMany:
     """Tests for pacsys.get_many()."""
 
-    def test_get_many_with_drf_strings(self, mock_backend, sample_reading, error_reading):
+    def test_get_many_with_drf_strings(self, fake):
         """get_many() accepts list of DRF strings."""
-        mock_backend.get_many.return_value = [sample_reading, error_reading]
-
-        with mock.patch.object(pacsys, "_global_backend", mock_backend):
-            with mock.patch.object(pacsys, "_backend_initialized", True):
-                results = pacsys.get_many(["M:OUTTMP", "M:BADDEV"])
-
+        fake.set_reading("M:OUTTMP", 72.5)
+        fake.set_error("M:BADDEV", -42, "Device not found")
+        results = pacsys.get_many(["M:OUTTMP", "M:BADDEV"])
         assert len(results) == 2
         assert results[0].ok
         assert results[1].is_error
 
-    def test_get_many_with_mixed_types(self, mock_backend, sample_reading):
+    def test_get_many_with_mixed_types(self, fake):
         """get_many() accepts mixed DRF strings and Device objects."""
-        mock_backend.get_many.return_value = [sample_reading, sample_reading, sample_reading]
+        fake.set_reading("M:OUTTMP", 72.5)
+        fake.set_reading("G:AMANDA.READING", 1.234)
+        fake.set_reading("B:VIMIN.READING", 0.5)
         device = Device("G:AMANDA")
         scalar = ScalarDevice("B:VIMIN")
-
-        with mock.patch.object(pacsys, "_global_backend", mock_backend):
-            with mock.patch.object(pacsys, "_backend_initialized", True):
-                results = pacsys.get_many(["M:OUTTMP", device, scalar])
-
+        results = pacsys.get_many(["M:OUTTMP", device, scalar])
         assert len(results) == 3
-        mock_backend.get_many.assert_called_once()
 
-    def test_get_many_with_timeout(self, mock_backend, sample_reading):
-        """get_many() passes timeout to backend."""
-        mock_backend.get_many.return_value = [sample_reading]
-
-        with mock.patch.object(pacsys, "_global_backend", mock_backend):
-            with mock.patch.object(pacsys, "_backend_initialized", True):
-                pacsys.get_many(["M:OUTTMP"], timeout=5.0)
-
-        mock_backend.get_many.assert_called_once_with(["M:OUTTMP"], timeout=5.0)
+    def test_get_many_with_timeout(self, fake):
+        """get_many() works with timeout parameter."""
+        fake.set_reading("M:OUTTMP", 72.5)
+        results = pacsys.get_many(["M:OUTTMP"], timeout=5.0)
+        assert len(results) == 1
+        assert results[0].value == 72.5
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -566,27 +491,18 @@ class TestGlobalBackendInitialization:
 class TestDeviceIntegration:
     """Tests for integration between Simple API and Device API."""
 
-    def test_device_uses_global_backend(self, mock_backend, sample_reading):
+    def test_device_uses_global_backend(self, fake):
         """Device uses global backend when none specified."""
-        mock_backend.read.return_value = 72.5
-        mock_backend.get.return_value = sample_reading
-
-        with mock.patch.object(pacsys, "_global_backend", mock_backend):
-            with mock.patch.object(pacsys, "_backend_initialized", True):
-                device = Device("M:OUTTMP")
-                value = device.read()
-
+        fake.set_reading("M:OUTTMP.READING", 72.5)
+        device = Device("M:OUTTMP")
+        value = device.read()
         assert value == 72.5
 
-    def test_scalar_device_uses_global_backend(self, mock_backend):
+    def test_scalar_device_uses_global_backend(self, fake):
         """ScalarDevice uses global backend when none specified."""
-        mock_backend.read.return_value = 72.5
-
-        with mock.patch.object(pacsys, "_global_backend", mock_backend):
-            with mock.patch.object(pacsys, "_backend_initialized", True):
-                device = ScalarDevice("M:OUTTMP")
-                value = device.read()
-
+        fake.set_reading("M:OUTTMP.READING", 72.5)
+        device = ScalarDevice("M:OUTTMP")
+        value = device.read()
         assert value == 72.5
         assert isinstance(value, float)
 

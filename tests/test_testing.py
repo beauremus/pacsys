@@ -870,7 +870,7 @@ class TestDRFNormalization:
     def test_range_stripped_from_key(self):
         """Ranges are stripped from key -- stored value is the full device array."""
         fake = FakeBackend()
-        fake.set_reading("B:HS23T", np.array([10, 20, 30, 40, 50]))
+        fake.set_reading("B:HS23T", np.array([10, 20, 30, 40, 50]), value_type=ValueType.SCALAR_ARRAY)
         # Read with same range or different range
         np.testing.assert_array_equal(fake.read("B:HS23T[0:2]"), [10, 20, 30])
         np.testing.assert_array_equal(fake.read("B:HS23T[1:3]"), [20, 30, 40])
@@ -879,7 +879,7 @@ class TestDRFNormalization:
         """set_reading with range stores value; read with same range returns it."""
         fake = FakeBackend()
         arr = np.array([1.0, 2.0, 3.0])
-        fake.set_reading("B:HS23T[0:2]", arr)
+        fake.set_reading("B:HS23T[0:2]", arr, value_type=ValueType.SCALAR_ARRAY)
         # Range is stripped from key, so reading without range returns full value
         np.testing.assert_array_equal(fake.read("B:HS23T"), arr)
 
@@ -943,14 +943,14 @@ class TestWriteUpdatesState:
     def test_ranged_write_slice_assigns(self):
         """Write to a ranged DRF updates only that slice of the stored array."""
         fake = FakeBackend()
-        fake.set_reading("B:HS23T", np.array([10, 20, 30, 40, 50]))
+        fake.set_reading("B:HS23T", np.array([10, 20, 30, 40, 50]), value_type=ValueType.SCALAR_ARRAY)
         fake.write("B:HS23T.READING[1:2]@N", np.array([77, 88]))
         np.testing.assert_array_equal(fake.read("B:HS23T"), [10, 77, 88, 40, 50])
 
     def test_ranged_write_single_element(self):
         """Write to a single-element range updates only that index."""
         fake = FakeBackend()
-        fake.set_reading("B:HS23T", np.array([10, 20, 30]))
+        fake.set_reading("B:HS23T", np.array([10, 20, 30]), value_type=ValueType.SCALAR_ARRAY)
         fake.write("B:HS23T.READING[0]@N", 99)
         np.testing.assert_array_equal(fake.read("B:HS23T"), [99, 20, 30])
 
@@ -992,7 +992,7 @@ class TestDeviceIntegration:
         """ArrayDevice can use FakeBackend."""
         fake = FakeBackend()
         dev = ArrayDevice("B:HS23T[0:3]", backend=fake)
-        fake.set_reading("B:HS23T[0:3]", np.array([1.0, 2.0, 3.0]))
+        fake.set_reading("B:HS23T[0:3]", np.array([1.0, 2.0, 3.0]), value_type=ValueType.SCALAR_ARRAY)
 
         values = dev.read()
 
@@ -1622,7 +1622,7 @@ class TestEventPerturbation:
         """Float ndarray gets uniform offset on fallback."""
         fake = FakeBackend()
         arr = np.array([1.0, 2.0, 3.0])
-        fake.set_reading("M:OUTTMP", arr)
+        fake.set_reading("M:OUTTMP", arr, value_type=ValueType.SCALAR_ARRAY)
         result = fake.read("M:OUTTMP@p,1000")
         np.testing.assert_array_equal(result, arr + 1.0)
 
@@ -1635,26 +1635,26 @@ class TestEventPerturbation:
     def test_no_perturb_bytes(self):
         """Bytes values are not perturbed."""
         fake = FakeBackend()
-        fake.set_reading("M:OUTTMP", b"\x01\x02\x03")
+        fake.set_reading("M:OUTTMP", b"\x01\x02\x03", value_type=ValueType.RAW)
         assert fake.read("M:OUTTMP@p,1000") == b"\x01\x02\x03"
 
     def test_no_perturb_str(self):
         """String values are not perturbed."""
         fake = FakeBackend()
-        fake.set_reading("M:OUTTMP", "hello")
+        fake.set_reading("M:OUTTMP", "hello", value_type=ValueType.TEXT)
         assert fake.read("M:OUTTMP@p,1000") == "hello"
 
     def test_no_perturb_dict(self):
         """Dict values are not perturbed."""
         fake = FakeBackend()
-        fake.set_reading("M:OUTTMP", {"on": True, "ready": False})
+        fake.set_reading("M:OUTTMP", {"on": True, "ready": False}, value_type=ValueType.BASIC_STATUS)
         assert fake.read("M:OUTTMP@p,1000") == {"on": True, "ready": False}
 
     def test_no_perturb_integer_ndarray(self):
         """Integer ndarray is not perturbed."""
         fake = FakeBackend()
         arr = np.array([1, 2, 3])
-        fake.set_reading("M:OUTTMP", arr)
+        fake.set_reading("M:OUTTMP", arr, value_type=ValueType.SCALAR_ARRAY)
         np.testing.assert_array_equal(fake.read("M:OUTTMP@p,1000"), arr)
 
     def test_different_events_different_offsets(self):

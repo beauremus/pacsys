@@ -3,6 +3,7 @@ Tests for pacsys.types module.
 """
 
 import threading
+import time
 from datetime import datetime
 
 import pytest
@@ -225,13 +226,17 @@ class TestCombinedStream:
         t_early = datetime(2025, 1, 1, 0, 0, 0)
         t_late = datetime(2025, 1, 1, 0, 0, 1)
 
-        def emit_then_stop():
-            fake.emit_reading("G:AMANDA", 10.0, timestamp=t_late)
-            fake.emit_reading("M:OUTTMP", 20.0, timestamp=t_early)
+        # Emit both readings first so they're buffered in the queues,
+        # then stop — this avoids timing-dependent batch boundaries.
+        fake.emit_reading("G:AMANDA", 10.0, timestamp=t_late)
+        fake.emit_reading("M:OUTTMP", 20.0, timestamp=t_early)
+
+        def stop_later():
+            time.sleep(0.05)
             h1.stop()
             h2.stop()
 
-        threading.Timer(0.05, emit_then_stop).start()
+        threading.Thread(target=stop_later, daemon=True).start()
 
         results = list(CombinedStream([h1, h2]).readings(timeout=2))
         assert len(results) == 2
