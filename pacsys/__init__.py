@@ -140,7 +140,21 @@ def _atexit_close_backends() -> None:
 atexit.register(_atexit_close_backends)
 
 
-def configure(**kwargs) -> None:
+_UNSET = object()  # sentinel: distinguish "not passed" from "passed as None"
+
+
+def configure(
+    *,
+    dpm_host: Optional[str] = _UNSET,
+    dpm_port: Optional[int] = _UNSET,
+    pool_size: Optional[int] = _UNSET,
+    default_timeout: Optional[float] = _UNSET,
+    devdb_host: Optional[str] = _UNSET,
+    devdb_port: Optional[int] = _UNSET,
+    backend: Optional[str] = _UNSET,
+    auth: Optional[Auth] = _UNSET,
+    role: Optional[str] = _UNSET,
+) -> None:
     """Configure pacsys global settings.
 
     Must be called BEFORE any read/get operations. Pass None to clear
@@ -159,26 +173,11 @@ def configure(**kwargs) -> None:
 
     Raises:
         RuntimeError: If called after any backend is initialized
-        ValueError: If backend is not a valid backend type or unknown kwargs
+        ValueError: If backend is not a valid backend type
     """
     global _config_dpm_host, _config_dpm_port, _config_pool_size, _config_timeout
     global _config_devdb_host, _config_devdb_port
     global _config_backend, _config_auth, _config_role
-
-    _VALID_KEYS = {
-        "dpm_host",
-        "dpm_port",
-        "pool_size",
-        "default_timeout",
-        "devdb_host",
-        "devdb_port",
-        "backend",
-        "auth",
-        "role",
-    }
-    unknown = set(kwargs) - _VALID_KEYS
-    if unknown:
-        raise ValueError(f"Unknown configure() parameters: {sorted(unknown)}")
 
     with _global_lock:
         if _backend_initialized or _devdb_initialized:
@@ -187,27 +186,26 @@ def configure(**kwargs) -> None:
                 "Call shutdown() first to close the backend, then configure() to change settings."
             )
 
-        if "backend" in kwargs:
-            backend = kwargs["backend"]
+        if backend is not _UNSET:
             if backend is not None and backend not in _VALID_BACKENDS:
                 raise ValueError(f"Invalid backend {backend!r}, must be one of {sorted(_VALID_BACKENDS)}")
             _config_backend = backend
-        if "auth" in kwargs:
-            _config_auth = kwargs["auth"]
-        if "role" in kwargs:
-            _config_role = kwargs["role"]
-        if "dpm_host" in kwargs:
-            _config_dpm_host = kwargs["dpm_host"]
-        if "dpm_port" in kwargs:
-            _config_dpm_port = kwargs["dpm_port"]
-        if "pool_size" in kwargs:
-            _config_pool_size = kwargs["pool_size"]
-        if "default_timeout" in kwargs:
-            _config_timeout = kwargs["default_timeout"]
-        if "devdb_host" in kwargs:
-            _config_devdb_host = kwargs["devdb_host"]
-        if "devdb_port" in kwargs:
-            _config_devdb_port = kwargs["devdb_port"]
+        if auth is not _UNSET:
+            _config_auth = auth
+        if role is not _UNSET:
+            _config_role = role
+        if dpm_host is not _UNSET:
+            _config_dpm_host = dpm_host
+        if dpm_port is not _UNSET:
+            _config_dpm_port = dpm_port
+        if pool_size is not _UNSET:
+            _config_pool_size = pool_size
+        if default_timeout is not _UNSET:
+            _config_timeout = default_timeout
+        if devdb_host is not _UNSET:
+            _config_devdb_host = devdb_host
+        if devdb_port is not _UNSET:
+            _config_devdb_port = devdb_port
 
 
 def shutdown() -> None:
