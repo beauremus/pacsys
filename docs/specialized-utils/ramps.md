@@ -1,6 +1,6 @@
 # Ramp Tables
 
-The `Ramp` (and its subclass `BoosterRamp`) classes provide convenient interface for reading and writing ramp tables. `RampGroup` (and `BoosterRampGroup`) provide batched 2D-array access for multiple devices. This is a partial reimplementation of Java `RampDevice`.
+The `Ramp` (and its subclass `BoosterHVRamp`) classes provide convenient interface for reading and writing ramp tables. `RampGroup` (and `BoosterHVRampGroup`) provide batched 2D-array access for multiple devices. This is a partial reimplementation of Java `RampDevice`.
 
 ---
 
@@ -17,22 +17,26 @@ The total slot size is 256 bytes. Ramp slots are indexed starting at 0, and can 
 
 ### Value Scaling
 
-Values are converted between raw int16 and engineering units via overridable transform functions:
+Values are converted between raw int16 and engineering units. There are two ways to define the scaling:
+
+1. **Set `scaler`** to a `Scaler` instance (recommended for standard ACNET transforms — parameters from the device database).
+2. **Override transform classmethods** for custom/non-standard transforms.
+
+When using the `Scaler`, the standard two-stage ACNET transform chain is applied automatically:
 
 ```
-Forward:  engineering = common_transform(primary_transform(raw))
-Inverse:  raw = inverse_primary_transform(inverse_common_transform(engineering))
+Forward:  engineering = common_scale(primary_scale(raw))
+Inverse:  raw = primary_unscale(common_unscale(engineering))
 ```
 
-`BoosterRamp` implements these as linear transforms for Booster magnets (engineering units in Amps).
-
-### Current value scaling presets
-
-| Class | Primary Transform | Common Transform | Combined | Units |
-|-------|------------------|-----------------|----------|-------|
-| `BoosterRamp` | raw / 3276.8 | primary * 4.0 | raw / 819.2 | Amps |
-
-The quantization step for BoosterRamp is approximately 0.00122 Amps.
+| Class | Card | Example | Primary (p_index) | Common (c_index) | Combined |
+|-------|------|---------|-------------------|-----------------|----------|
+| `BoosterHVRamp` | C473 | B:HS23 | raw / 3276.8 (2) | primary × 4.0 (6, C1=4.0, C2=1.0) | raw × 4.0 / 3276.8 |
+| `BoosterQRamp` | C473 | B:QS23 | raw / 3276.8 (2) | primary × 6.5 (6, C1=6.5, C2=1.0) | raw × 6.5 / 3276.8 |
+| `RecyclerQuadRamp` | C453 | R:QT606 | raw / 3276.8 (2) | primary × 2.0 (6, C1=2.0, C2=1.0) | raw × 2.0 / 3276.8 |
+| `RecyclerSRamp` | C453 | R:S202 | raw / 3200.0 (0) | primary × 1.2 (6, C1=1.2, C2=1.0) | raw × 1.2 / 3200.0 |
+| `RecyclerSCRamp` | C475 | R:SC319 | raw / 3276.8 (2) | primary × 1.2 (6, C1=1.2, C2=1.0) | raw × 1.2 / 3276.8 |
+| `RecyclerHVSQRamp` | C453 | R:H626, R:SQ410 | raw / 3276.8 (2) | primary × 1.2 (6, C1=12.0, C2=10.0) | raw × 12.0 / (3276.8 × 10.0) |
 
 ### Time Scaling
 
@@ -56,12 +60,17 @@ Different card types have different update rates:
 | Class | `update_rate_hz` | Tick Period | Max Time |
 |-------|-----------------|-------------|----------|
 | `Ramp` (default) | 10,000 Hz | 100 µs | (none) |
-| `BoosterRamp` | 100,000 Hz | 10 µs | 66,660 µs (~one 15 Hz cycle) |
+| `BoosterHVRamp` | 100,000 Hz | 10 µs | 66,660 µs (~one 15 Hz cycle) |
+| `BoosterQRamp` | 100,000 Hz | 10 µs | (none) |
+| `RecyclerQuadRamp` | 720 Hz | 1,389 µs | (none) |
+| `RecyclerSRamp` | 720 Hz | 1,389 µs | (none) |
+| `RecyclerSCRamp` | 100,000 Hz | 10 µs | (none) |
+| `RecyclerHVSQRamp` | 720 Hz | 1,389 µs | (none) |
 
 ```python
-from pacsys import BoosterRamp
+from pacsys import BoosterHVRamp
 
-ramp = BoosterRamp.read("B:HS23T", slot=0)
+ramp = BoosterHVRamp.read("B:HS23T", slot=0)
 print(ramp.values)  # float64 array, Amps
 print(ramp.times)   # float64 array, microseconds
 ```
@@ -73,9 +82,9 @@ print(ramp.times)   # float64 array, microseconds
 The `modify()` context manager handles read-modify-write automatically:
 
 ```python
-from pacsys import BoosterRamp
+from pacsys import BoosterHVRamp
 
-with BoosterRamp.modify("B:HS23T", slot=1) as ramp:
+with BoosterHVRamp.modify("B:HS23T", slot=1) as ramp:
     ramp.values[0] += 1.0   # bump first point by 1 Amp
 ```
 
@@ -86,10 +95,10 @@ Ramp state is read on context entrance and changes are written on context exit; 
 ## Manual Read/Write
 
 ```python
-from pacsys import BoosterRamp
+from pacsys import BoosterHVRamp
 
 # Read — stores device and slot on the ramp
-ramp = BoosterRamp.read("B:HS23T", slot=0)
+ramp = BoosterHVRamp.read("B:HS23T", slot=0)
 ramp.device  # "B:HS23T"
 ramp.slot    # 0
 
@@ -111,12 +120,12 @@ ramp.write(device="B:HS24T", slot=1)
 Read or write multiple devices in a single backend call using `read_ramps()` / `write_ramps()` or the `Ramp.read_many()` classmethod:
 
 ```python
-from pacsys import BoosterRamp, read_ramps, write_ramps
+from pacsys import BoosterHVRamp, read_ramps, write_ramps
 
 # Batched read — single get_many call
-ramps = BoosterRamp.read_many(["B:HS23T", "B:HS24T", "B:HS25T"], slot=0)
+ramps = BoosterHVRamp.read_many(["B:HS23T", "B:HS24T", "B:HS25T"], slot=0)
 # or equivalently:
-ramps = read_ramps(BoosterRamp, ["B:HS23T", "B:HS24T", "B:HS25T"], slot=0)
+ramps = read_ramps(BoosterHVRamp, ["B:HS23T", "B:HS24T", "B:HS25T"], slot=0)
 
 for ramp in ramps:
     print(f"{ramp.device}: {ramp.values[0]:.2f} A")
@@ -139,12 +148,12 @@ write_ramps(ramps, slot=2)              # override slot for all
 
 ## RampGroup (2D Array Semantics)
 
-`RampGroup` stores ramp data for multiple devices as 2D numpy arrays with shape `(64, N_devices)`. Axis 0 is the point index, axis 1 is the device. Use `BoosterRampGroup` for Booster correctors.
+`RampGroup` stores ramp data for multiple devices as 2D numpy arrays with shape `(64, N_devices)`. Axis 0 is the point index, axis 1 is the device. Use `BoosterHVRampGroup` for Booster correctors.
 
 ```python
-from pacsys import BoosterRampGroup
+from pacsys import BoosterHVRampGroup
 
-group = BoosterRampGroup.read(["B:HS23T", "B:HS24T", "B:HS25T"], slot=0)
+group = BoosterHVRampGroup.read(["B:HS23T", "B:HS24T", "B:HS25T"], slot=0)
 group.values          # shape (64, 3) float64
 group.times           # shape (64, 3) float64
 group.devices         # ["B:HS23T", "B:HS24T", "B:HS25T"]
@@ -183,7 +192,7 @@ group.write(devices=["B:OTHER1", "B:OTHER2", "B:OTHER3"], slot=1)
 The `modify()` context manager reads on entry and writes **only changed devices** on exit:
 
 ```python
-with BoosterRampGroup.modify(["B:HS23T", "B:HS24T"], slot=0) as group:
+with BoosterHVRampGroup.modify(["B:HS23T", "B:HS24T"], slot=0) as group:
     group.values[10] += 0.5  # bump point 10 for all devices
 # writes on exit if changed; raises RuntimeError on partial failure
 ```
@@ -192,7 +201,39 @@ with BoosterRampGroup.modify(["B:HS23T", "B:HS24T"], slot=0) as group:
 
 ## Custom Machine Types
 
-Subclass `Ramp` and implement the four transform functions:
+### Using Scaler (recommended)
+
+Set the `scaler` class variable to a `Scaler` instance with the device's scaling parameters from the database (`p_index`, `c_index`, and constants). This is what `BoosterHVRamp` uses:
+
+```python
+from pacsys import Ramp, Scaler
+
+class BoosterHVRamp(Ramp):
+    update_rate_hz = 100_000  # 473 card: 100 KHz fixed
+    max_value = 1000.0
+    max_time = 66_660.0
+    scaler = Scaler(p_index=2, c_index=6, constants=(4.0, 1.0), input_len=2)
+
+ramp = BoosterHVRamp.read("B:HS23T", slot=0)
+```
+
+The scaling parameters can be found in the device database or looked up via DevDB:
+
+```python
+from pacsys import Scaler
+
+with pacsys.devdb() as db:
+    info = db.get_device_info(["B:HS23T"])
+    prop = info["B:HS23T"].setting
+    scaler = Scaler.from_property_info(prop, input_len=2)
+    print(scaler)  # Scaler(p_index=2, c_index=2, constants=(4.0, 1.0, 0.0), input_len=2)
+```
+
+See [Scaling](../scaling.md) for details on `Scaler`, transform indices, and supported operations.
+
+### Manual Transforms
+
+For non-standard scaling (e.g., nonlinear, lookup tables, or transforms not covered by the `Scaler`), subclass `Ramp` and override the four transform classmethods:
 
 ```python
 from pacsys import Ramp
@@ -221,7 +262,7 @@ class MainInjectorRamp(Ramp):
 ramp = MainInjectorRamp.read("MI:DEVICE", slot=0)
 ```
 
-Transforms can also be nonlinear (e.g., polynomial, lookup table). We currently do not (re)implement any standard ACNET transforms - look them up on your own.
+Transforms can be nonlinear (e.g., polynomial, lookup table).
 
 ### Custom RampGroup
 
@@ -243,10 +284,10 @@ group = MainInjectorRampGroup.read(["MI:DEV1", "MI:DEV2"], slot=0)
 For low-level access, `from_bytes()` and `to_bytes()` handle the binary encoding:
 
 ```python
-from pacsys import BoosterRamp
+from pacsys import BoosterHVRamp
 
 raw = b"\x00" * 256  # 64 zero points
-ramp = BoosterRamp.from_bytes(raw)
+ramp = BoosterHVRamp.from_bytes(raw)
 
 # Serialize back
 raw_out = ramp.to_bytes()
@@ -257,11 +298,11 @@ raw_out = ramp.to_bytes()
 ## Error Handling
 
 ```python
-from pacsys import BoosterRamp
+from pacsys import BoosterHVRamp
 from pacsys.errors import DeviceError
 
 try:
-    ramp = BoosterRamp.read("B:BADDEV", slot=0)
+    ramp = BoosterHVRamp.read("B:BADDEV", slot=0)
 except DeviceError as e:
     print(f"Read failed: {e}")
 ```
@@ -269,7 +310,7 @@ except DeviceError as e:
 Validation errors (values exceeding `max_value` or `max_time`) are raised during `to_bytes()` / `write()`:
 
 ```python
-ramp.values[0] = 1500.0  # exceeds BoosterRamp.max_value (1000.0)
+ramp.values[0] = 1500.0  # exceeds BoosterHVRamp.max_value (1000.0)
 ramp.to_bytes()  # raises ValueError
 ```
 
@@ -278,10 +319,10 @@ ramp.to_bytes()  # raises ValueError
 ## Display
 
 ```python
-ramp = BoosterRamp.read("B:HS23T")
-print(repr(ramp))  # BoosterRamp(8/64 active points)
+ramp = BoosterHVRamp.read("B:HS23T")
+print(repr(ramp))  # BoosterHVRamp(8/64 active points)
 print(ramp)
-# BoosterRamp (64 points):
+# BoosterHVRamp (64 points):
 #   [ 0] t=     0.0us  value=1.2345
 #   [ 1] t=  2400.0us  value=2.3456
 #   ...
@@ -331,7 +372,7 @@ Update frequency is configurable between 1/5/10 kHz. Up to 15 ramp slots can be 
 
 ### 473 Class CAMAC Cards (473/475) (Quad Ramp Controller)
 
-The 473 CAMAC ramp card is used by Booster correctors. It has a fixed 100 KHz update rate (10 µs tick period). The `BoosterRamp` subclass uses this card type.
+The 473 CAMAC ramp card is used by Booster correctors. It has a fixed 100 KHz update rate (10 µs tick period).
 
 The output waveform is:
 

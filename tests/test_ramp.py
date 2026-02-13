@@ -7,10 +7,15 @@ import pytest
 
 from pacsys.errors import DeviceError
 from pacsys.ramp import (
-    BoosterRamp,
-    BoosterRampGroup,
+    BoosterHVRamp,
+    BoosterHVRampGroup,
+    BoosterQRamp,
     Ramp,
     RampGroup,
+    RecyclerHVSQRamp,
+    RecyclerQuadRamp,
+    RecyclerSCRamp,
+    RecyclerSRamp,
     read_ramps,
     write_ramps,
 )
@@ -60,7 +65,7 @@ def _make_ramp_bytes(pairs: list[tuple[int, int]], n_points: int = 64) -> bytes:
 class TestFromBytes:
     def test_parse_zeros(self):
         data = b"\x00" * 256
-        ramp = BoosterRamp.from_bytes(data)
+        ramp = BoosterHVRamp.from_bytes(data)
         assert np.all(ramp.values == 0.0)
         assert np.all(ramp.times == 0)
 
@@ -68,7 +73,7 @@ class TestFromBytes:
         # raw_value=8192 -> eng = 8192 / 3276.8 * 4.0 = 10.0
         # raw_time=100 ticks -> 100 * 10 = 1000 us at 100 KHz
         data = _make_ramp_bytes([(8192, 100), (-8192, 200)])
-        ramp = BoosterRamp.from_bytes(data)
+        ramp = BoosterHVRamp.from_bytes(data)
         assert ramp.values[0] == 10.0
         assert ramp.values[1] == -10.0
         assert ramp.times[0] == 1_000.0
@@ -77,15 +82,15 @@ class TestFromBytes:
 
     def test_wrong_length_raises(self):
         with pytest.raises(ValueError, match="requires 256 bytes"):
-            BoosterRamp.from_bytes(b"\x00" * 100)
+            BoosterHVRamp.from_bytes(b"\x00" * 100)
         with pytest.raises(ValueError, match="requires 256 bytes"):
-            BoosterRamp.from_bytes(b"\x00" * 300)
+            BoosterHVRamp.from_bytes(b"\x00" * 300)
 
     def test_byte_order(self):
         # Manual little-endian: value=0x0400=1024, time=0x0010=16
         point = struct.pack("<hh", 1024, 16)
         data = point + b"\x00" * (256 - 4)
-        ramp = BoosterRamp.from_bytes(data)
+        ramp = BoosterHVRamp.from_bytes(data)
         expected_eng = 1024 / 3276.8 * 4.0
         assert ramp.values[0] == expected_eng
         assert ramp.times[0] == 160.0  # 16 ticks * 10 us
@@ -95,8 +100,8 @@ class TestToBytes:
     def test_round_trip(self):
         """from_bytes(to_bytes(x)) preserves values within quantization."""
         original_data = _make_ramp_bytes([(8192, 100), (-4096, 50), (16384, 300)])
-        ramp = BoosterRamp.from_bytes(original_data)
-        round_tripped = BoosterRamp.from_bytes(ramp.to_bytes())
+        ramp = BoosterHVRamp.from_bytes(original_data)
+        round_tripped = BoosterHVRamp.from_bytes(ramp.to_bytes())
         np.testing.assert_allclose(round_tripped.values, ramp.values, atol=0.002)
         np.testing.assert_array_equal(round_tripped.times, ramp.times)
 
@@ -115,7 +120,7 @@ class TestToBytes:
 
     def test_known_engineering_to_raw(self):
         """Engineering value 10.0 -> raw 8192 (10.0 / 4.0 * 3276.8 = 8192)."""
-        ramp = BoosterRamp(
+        ramp = BoosterHVRamp(
             values=np.zeros(64),
             times=np.zeros(64),
         )
@@ -128,7 +133,7 @@ class TestToBytes:
 
     def test_rounding(self):
         """Values that don't map to exact int16 are rounded."""
-        ramp = BoosterRamp(
+        ramp = BoosterHVRamp(
             values=np.zeros(64),
             times=np.zeros(64),
         )
@@ -139,42 +144,59 @@ class TestToBytes:
         assert v == 819
 
 
-class TestBoosterRamp:
-    def test_transforms(self):
-        raw = np.array([3276.8])
-        assert BoosterRamp.primary_transform(raw)[0] == 1.0
-        assert BoosterRamp.common_transform(np.array([1.0]))[0] == 4.0
-        assert BoosterRamp.inverse_common_transform(np.array([4.0]))[0] == 1.0
-        assert BoosterRamp.inverse_primary_transform(np.array([1.0]))[0] == 3276.8
+_ALL_RAMP_CLASSES = [
+    pytest.param(BoosterHVRamp, id="BoosterHV"),
+    pytest.param(BoosterQRamp, id="BoosterQ"),
+    pytest.param(RecyclerQuadRamp, id="RecyclerQuad"),
+    pytest.param(RecyclerSRamp, id="RecyclerS"),
+    pytest.param(RecyclerSCRamp, id="RecyclerSC"),
+    pytest.param(RecyclerHVSQRamp, id="RecyclerHVSQ"),
+]
 
-    def test_conversion_forward(self):
-        """raw 8192 -> eng 10.0"""
-        data = _make_ramp_bytes([(8192, 0)])
-        ramp = BoosterRamp.from_bytes(data)
-        assert ramp.values[0] == 10.0
 
-    def test_conversion_inverse(self):
-        """eng 10.0 -> raw 8192"""
-        ramp = BoosterRamp(
-            values=np.array([10.0] + [0.0] * 63),
+@pytest.mark.parametrize("ramp_cls", _ALL_RAMP_CLASSES)
+class TestScalerRamp:
+    """Conversion tests for all concrete Ramp subclasses with scaler."""
+
+    def test_scaler_configured(self, ramp_cls):
+        from pacsys.scaling import Scaler
+
+        s = ramp_cls.scaler
+        assert isinstance(s, Scaler)
+        assert s.unscale(s.scale(1000)) == 1000
+
+    def test_conversion_forward(self, ramp_cls):
+        """from_bytes applies scaler correctly."""
+        raw = 1000
+        expected = ramp_cls.scaler.scale(raw)
+        data = _make_ramp_bytes([(raw, 0)])
+        ramp = ramp_cls.from_bytes(data)
+        assert ramp.values[0] == pytest.approx(expected)
+
+    def test_conversion_inverse(self, ramp_cls):
+        """to_bytes inverts scaler correctly."""
+        raw = 1000
+        eng = ramp_cls.scaler.scale(raw)
+        ramp = ramp_cls(
+            values=np.array([eng] + [0.0] * 63),
             times=np.zeros(64),
         )
-        raw = ramp.to_bytes()
-        v, _ = struct.unpack_from("<hh", raw, 0)
-        assert v == 8192
+        raw_bytes = ramp.to_bytes()
+        v, _ = struct.unpack_from("<hh", raw_bytes, 0)
+        assert v == raw
 
 
 class TestValidation:
     def test_wrong_values_length(self):
         with pytest.raises(ValueError, match="Expected 64 values"):
-            BoosterRamp(values=np.zeros(10), times=np.zeros(64))
+            BoosterHVRamp(values=np.zeros(10), times=np.zeros(64))
 
     def test_wrong_times_length(self):
         with pytest.raises(ValueError, match="Expected 64 times"):
-            BoosterRamp(values=np.zeros(64), times=np.zeros(10))
+            BoosterHVRamp(values=np.zeros(64), times=np.zeros(10))
 
     def test_max_value_exceeded(self):
-        ramp = BoosterRamp(
+        ramp = BoosterHVRamp(
             values=np.array([1500.0] + [0.0] * 63),
             times=np.zeros(64),
         )
@@ -182,28 +204,28 @@ class TestValidation:
             ramp.to_bytes()
 
     def test_nan_value_raises(self):
-        ramp = BoosterRamp(values=np.zeros(64), times=np.zeros(64))
+        ramp = BoosterHVRamp(values=np.zeros(64), times=np.zeros(64))
         ramp.values[0] = float("nan")
         with pytest.raises(ValueError, match="NaN or Inf"):
             ramp.to_bytes()
 
     def test_inf_time_raises(self):
         """Inf time is caught — by max_time if set, by finite check otherwise."""
-        ramp = BoosterRamp(values=np.zeros(64), times=np.zeros(64))
+        ramp = BoosterHVRamp(values=np.zeros(64), times=np.zeros(64))
         ramp.times[0] = float("inf")
         with pytest.raises(ValueError):
             ramp.to_bytes()
 
     def test_value_overflow_int16_raises(self):
         """Engineering value that maps to raw > 32767 raises on serialization."""
-        ramp = BoosterRamp(values=np.zeros(64), times=np.zeros(64))
+        ramp = BoosterHVRamp(values=np.zeros(64), times=np.zeros(64))
         ramp.values[0] = 50.0  # raw = 50/4*3276.8 = 40960, exceeds int16
-        with pytest.raises(ValueError, match="overflow int16"):
+        with pytest.raises(ValueError, match="overflow"):
             ramp.to_bytes()
 
     def test_max_time_exceeded(self):
-        # 66_660 us is max for BoosterRamp; 70_000 us exceeds it
-        ramp = BoosterRamp(
+        # 66_660 us is max for BoosterHVRamp; 70_000 us exceeds it
+        ramp = BoosterHVRamp(
             values=np.zeros(64),
             times=np.array([70_000.0] + [0.0] * 63),
         )
@@ -212,7 +234,7 @@ class TestValidation:
 
     def test_value_at_max_allowed(self):
         """Exactly max_value (1000.0) passes _validate()."""
-        ramp = BoosterRamp(
+        ramp = BoosterHVRamp(
             values=np.array([1000.0] + [0.0] * 63),
             times=np.zeros(64),
         )
@@ -220,7 +242,7 @@ class TestValidation:
 
     def test_time_at_max_allowed(self):
         """Exactly max_time (66660 us) is accepted."""
-        ramp = BoosterRamp(
+        ramp = BoosterHVRamp(
             values=np.zeros(64),
             times=np.array([66_660.0] + [0.0] * 63),
         )
@@ -384,8 +406,8 @@ class TestModifyContext:
 
 class TestTimeScaling:
     def test_booster_rate_100khz(self):
-        assert BoosterRamp.update_rate_hz == 100_000
-        assert BoosterRamp._tick_us() == 10.0
+        assert BoosterHVRamp.update_rate_hz == 100_000
+        assert BoosterHVRamp._tick_us() == 10.0
 
     def test_base_default_rate_10khz(self):
         assert Ramp.update_rate_hz == 10_000
@@ -394,7 +416,7 @@ class TestTimeScaling:
     def test_time_round_trip(self):
         """Times survive from_bytes -> to_bytes at 100 KHz."""
         data = _make_ramp_bytes([(0, 500)])  # 500 ticks
-        ramp = BoosterRamp.from_bytes(data)
+        ramp = BoosterHVRamp.from_bytes(data)
         assert ramp.times[0] == 5_000.0  # 500 * 10 us
         raw = ramp.to_bytes()
         _, t = struct.unpack_from("<hh", raw, 0)
@@ -927,16 +949,16 @@ class TestRampGroupModify:
         assert not any("B:HS24T" in d for d in written_devs)
 
 
-class TestBoosterRampGroup:
+class TestBoosterHVRampGroup:
     def test_inherits_correctly(self):
-        assert BoosterRampGroup.base is BoosterRamp
+        assert BoosterHVRampGroup.base is BoosterHVRamp
 
     def test_read_returns_correct_type(self, fake_backend):
         for dev in ["B:HS23T", "B:HS24T"]:
             fake_backend.set_reading(f"{dev}.SETTING.RAW@I", b"\x00" * 256)
-        group = BoosterRampGroup.read(["B:HS23T", "B:HS24T"], backend=fake_backend)
-        assert isinstance(group, BoosterRampGroup)
-        assert isinstance(group["B:HS23T"], BoosterRamp)
+        group = BoosterHVRampGroup.read(["B:HS23T", "B:HS24T"], backend=fake_backend)
+        assert isinstance(group, BoosterHVRampGroup)
+        assert isinstance(group["B:HS23T"], BoosterHVRamp)
 
 
 @pytest.fixture

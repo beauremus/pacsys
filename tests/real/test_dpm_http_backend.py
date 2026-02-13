@@ -20,6 +20,14 @@ import threading
 import pytest
 
 from pacsys.backends.dpm_http import DPMHTTPBackend
+from pacsys.ramp import (
+    BoosterHVRamp,
+    BoosterQRamp,
+    RecyclerHVSQRamp,
+    RecyclerQuadRamp,
+    RecyclerSCRamp,
+    RecyclerSRamp,
+)
 from pacsys.types import BasicControl
 
 from .devices import (
@@ -239,54 +247,61 @@ class TestDeviceDigitalStatus:
 # Ramp Table Tests
 # =============================================================================
 
+_RAMP_DEVICES = [
+    pytest.param(BoosterHVRamp, "B:HS23T", id="BoosterHV"),
+    pytest.param(BoosterQRamp, "B:QS23T", id="BoosterQ"),
+    pytest.param(RecyclerQuadRamp, "R:QT606T", id="RecyclerQuad"),
+    pytest.param(RecyclerSRamp, "R:S202T", id="RecyclerS"),
+    pytest.param(RecyclerSCRamp, "R:SC319T", id="RecyclerSC"),
+    pytest.param(RecyclerHVSQRamp, "R:H626T", id="RecyclerHVSQ"),
+]
+
 
 @requires_dpm_http
-class TestBoosterRamp:
-    """Read a real Booster corrector ramp table via DPM HTTP."""
+@pytest.mark.parametrize("ramp_cls,device", _RAMP_DEVICES)
+class TestRamp:
+    """Read real ramp tables via DPM HTTP across all ramp types."""
 
-    def test_read_ramp(self):
-        """Read slot 0 from B:HS23T, verify structure, and cross-check with scalar read."""
+    def test_read_ramp(self, ramp_cls, device):
+        """Read slots 0-1, verify structure, cross-check with scalar read."""
         import numpy as np
-        from pacsys.ramp import BoosterRamp
+
+        qualifier = device.replace(":", "_")
 
         with DPMHTTPBackend() as backend:
-            ramp = BoosterRamp.read("B:HS23T", slot=0, backend=backend)
+            for slot in [0, 1]:
+                idx = 64 * slot + 1
+                ramp = ramp_cls.read(device, slot=slot, backend=backend)
 
-            assert isinstance(ramp, BoosterRamp)
-            assert ramp.values.shape == (64,)
-            assert ramp.times.shape == (64,)
-            assert ramp.values.dtype == np.float64
-            assert ramp.times.dtype == np.float64
+                assert isinstance(ramp, ramp_cls)
+                assert ramp.values.shape == (64,)
+                assert ramp.times.shape == (64,)
+                assert ramp.values.dtype == np.float64
+                assert ramp.times.dtype == np.float64
 
-            print(f"\nRamp times (us): {ramp.times}")
-            print(f"Ramp values: {ramp.values}")
+                print(f"\n{ramp_cls.__name__} {device} slot {slot}:")
+                print(f"  times (us): {ramp.times}")
+                print(f"  values:     {ramp.values}")
 
-            # Cross-check: read SETTING[7] as scalar via DPM and compare
-            # to the ramp table value at the same index
-            scalar = backend.read("B_HS23T[7]", timeout=TIMEOUT_READ)
-            print(f"\nB_HS23T[7] scalar = {scalar}")
-            print(f"ramp.values[7]    = {ramp.values[7]}")
-            assert ramp.values[7] == pytest.approx(scalar, rel=0.01)
+                # Cross-check: scalar read at same index should match ramp value
+                scalar = backend.read(f"{qualifier}[{idx}]", timeout=TIMEOUT_READ)
+                print(f"  scalar[{idx}] = {scalar}, ramp.values[1] = {ramp.values[1]}")
+                assert ramp.values[1] == scalar
 
-    def test_read_ramp_round_trip_bytes(self):
+    def test_round_trip_bytes(self, ramp_cls, device):
         """from_bytes(to_bytes(read)) preserves the wire representation."""
-        from pacsys.ramp import BoosterRamp
-
         with DPMHTTPBackend() as backend:
-            ramp = BoosterRamp.read("B:HS23T", slot=0, backend=backend)
-            raw = ramp.to_bytes()
-            ramp2 = BoosterRamp.from_bytes(raw)
+            ramp = ramp_cls.read(device, slot=0, backend=backend)
+            ramp2 = ramp_cls.from_bytes(ramp.to_bytes())
 
-            assert ramp2.values == pytest.approx(ramp.values, abs=0.002)
-            assert ramp2.times == pytest.approx(ramp.times)
+            assert all(ramp2.values == ramp.values)
+            assert all(ramp2.times == ramp.times)
 
-    def test_read_multiple_slots(self):
+    def test_read_multiple_slots(self, ramp_cls, device):
         """Slots 0 and 1 can both be read (may or may not differ)."""
-        from pacsys.ramp import BoosterRamp
-
         with DPMHTTPBackend() as backend:
-            ramp0 = BoosterRamp.read("B:HS23T", slot=0, backend=backend)
-            ramp1 = BoosterRamp.read("B:HS23T", slot=1, backend=backend)
+            ramp0 = ramp_cls.read(device, slot=0, backend=backend)
+            ramp1 = ramp_cls.read(device, slot=1, backend=backend)
 
             assert ramp0.values.shape == (64,)
             assert ramp1.values.shape == (64,)

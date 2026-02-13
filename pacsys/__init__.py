@@ -881,8 +881,8 @@ _LAZY_IMPORTS: dict[str, str] = {
     # ramp
     "Ramp": "pacsys.ramp",
     "RampGroup": "pacsys.ramp",
-    "BoosterRamp": "pacsys.ramp",
-    "BoosterRampGroup": "pacsys.ramp",
+    "BoosterHVRamp": "pacsys.ramp",
+    "BoosterHVRampGroup": "pacsys.ramp",
     "read_ramps": "pacsys.ramp",
     "write_ramps": "pacsys.ramp",
     # digital_status
@@ -983,8 +983,8 @@ __all__ = [
     # Ramp
     "Ramp",
     "RampGroup",
-    "BoosterRamp",
-    "BoosterRampGroup",
+    "BoosterHVRamp",
+    "BoosterHVRampGroup",
     "read_ramps",
     "write_ramps",
     # SSH

@@ -15,7 +15,6 @@ format is value-first. See RampDevice.getFtTable() and setFtTable().
 Value scaling follows the standard ACNET two-stage transform chain:
     Forward:  engineering = common_transform(primary_transform(raw))
     Inverse:  raw = inverse_primary_transform(inverse_common_transform(eng))
-Java equivalent: pdudcu (raw→eng) and pdcuud (eng→raw) via ReadSetScaling.
 
 Time scaling: raw times on the wire are clock ticks. The card's update rate
 (update_rate_hz) determines the tick period. Times are converted to/from
@@ -29,15 +28,21 @@ getScaledUpdateFrequency(). Card types and their rates:
     473 (CAMAC):  100 KHz fixed (Booster correctors)
 
 Example usage:
-    ramp = BoosterRamp.read("B:HS23T", slot=0)
+    ramp = BoosterHVRamp.read("B:HS23T", slot=0)
     print(ramp.values)  # engineering units (Amps)
     print(ramp.times)   # microseconds (float64)
 
-    with BoosterRamp.modify("B:HS23T", slot=0) as ramp:
+    with BoosterHVRamp.modify("B:HS23T", slot=0) as ramp:
         ramp.values[10] = 2.5  # set point 10 to 2.5 Amps
 
-    # Custom machine type -- override transform functions
+    # Custom machine type using Scaler (recommended for standard ACNET transforms):
+    from pacsys import Scaler
     class MyRamp(Ramp):
+        update_rate_hz = 5000
+        scaler = Scaler(p_index=2, c_index=2, constants=(2.0, 1.0, 0.0), input_len=2)
+
+    # Custom machine type with manual transforms (for non-standard scaling):
+    class MyCustomRamp(Ramp):
         update_rate_hz = 5000  # 5 KHz card
 
         @classmethod
@@ -60,6 +65,8 @@ import struct
 
 import numpy as np
 from typing import TYPE_CHECKING, ClassVar, Optional
+
+from pacsys.scaling import Scaler
 
 if TYPE_CHECKING:
     from pacsys.backends import Backend
@@ -105,9 +112,19 @@ def _validate_device_name(drf: str) -> None:
 
 __all__ = [
     "Ramp",
-    "BoosterRamp",
+    "RecyclerQuadRamp",
+    "RecyclerQuadRampGroup",
+    "RecyclerSRamp",
+    "RecyclerSRampGroup",
+    "RecyclerSCRamp",
+    "RecyclerSCRampGroup",
+    "RecyclerHVSQRamp",
+    "RecyclerHVSQRampGroup",
+    "BoosterHVRamp",
+    "BoosterHVRampGroup",
+    "BoosterQRamp",
+    "BoosterQRampGroup",
     "RampGroup",
-    "BoosterRampGroup",
     "read_ramps",
     "write_ramps",
 ]
@@ -116,8 +133,13 @@ __all__ = [
 class Ramp:
     """Ramp table (64 points of time/value pairs).
 
-    Subclasses MUST override the four transform classmethods to define
-    the raw <-> primary <-> common (engineering) unit conversions.
+    Value scaling is handled in one of two ways:
+
+    1. Set ``scaler`` to a ``Scaler`` instance (recommended for standard
+       ACNET transforms — use parameters from the device database).
+
+    2. Override the four transform classmethods for custom/non-standard
+       transforms.
 
     Forward:  engineering = common_transform(primary_transform(raw))
     Inverse:  raw = inverse_primary_transform(inverse_common_transform(engineering))
@@ -135,7 +157,10 @@ class Ramp:
     max_value: ClassVar[float | None] = None
     max_time: ClassVar[float | None] = None
 
-    # --- Transform functions (override in subclass) ---
+    # Scaler for standard ACNET transforms (alternative to overriding classmethods).
+    scaler: ClassVar[Scaler | None] = None
+
+    # --- Transform functions (override in subclass if scaler is not set) ---
 
     @classmethod
     def primary_transform(cls, raw: np.ndarray) -> np.ndarray:
@@ -225,16 +250,30 @@ class Ramp:
         raw_values = np.array(unpacked[0::2], dtype=np.int16)
         raw_times = np.array(unpacked[1::2], dtype=np.int16)
 
-        primary = cls.primary_transform(raw_values.astype(np.float64))
-        eng_values = cls.common_transform(primary)
+        if cls.scaler is not None:
+            eng_values = cls.scaler.scale(raw_values.astype(np.int64))
+        else:
+            primary = cls.primary_transform(raw_values.astype(np.float64))
+            eng_values = cls.common_transform(primary)
         times_us = raw_times.astype(np.float64) * cls._tick_us()
         return cls(values=eng_values, times=times_us)
 
     def to_bytes(self) -> bytes:
         """Serialize ramp table to raw bytes (value-first wire order)."""
+        from pacsys.scaling import ScalingError
+
         self._validate()
-        primary = self.inverse_common_transform(self.values)
-        raw_values_f = np.round(self.inverse_primary_transform(primary))
+        scaler = type(self).scaler
+        if scaler is not None:
+            if not np.all(np.isfinite(self.values)):
+                raise ValueError("Raw values contain NaN or Inf")
+            try:
+                raw_values_f = scaler.unscale(self.values).astype(np.float64)
+            except ScalingError as e:
+                raise ValueError(f"Raw values overflow int16: {e}") from None
+        else:
+            primary = self.inverse_common_transform(self.values)
+            raw_values_f = np.round(self.inverse_primary_transform(primary))
         raw_times_f = np.round(self.times / self._tick_us())
 
         # Check for non-finite values (NaN/Inf bypass comparison checks)
@@ -391,12 +430,59 @@ class Ramp:
         return "\n".join(lines)
 
 
-class BoosterRamp(Ramp):
+class RecyclerQuadRamp(Ramp):
+    """Recycler quad ramp table (453 CAMAC card).
+
+    Scaling: p_index=2 (raw / 3276.8), c_index=6 with C1=2.0, C2=1.0
+    Combined: engineering = 2.0 * raw / 3276.8
+    Update rate: 720 Hz fixed (1389 us/tick).
+    """
+
+    update_rate_hz: ClassVar[int] = 720  # 453 CAMAC card: 720 Hz fixed
+    scaler: ClassVar[Scaler | None] = Scaler(p_index=2, c_index=6, constants=(2.0, 1.0), input_len=2)
+
+
+class RecyclerSRamp(Ramp):
+    """Recycler sextupole ramp table (453 CAMAC card).
+
+    Scaling: p_index=0 (raw / 3200.0), c_index=6 with C1=1.2, C2=1.0
+    Combined: engineering = 1.2 * raw / 3200.0
+    Update rate: 720 Hz fixed (1389 us/tick).
+    """
+
+    update_rate_hz: ClassVar[int] = 720  # 453 CAMAC card: 720 Hz fixed
+    scaler: ClassVar[Scaler | None] = Scaler(p_index=0, c_index=6, constants=(1.2, 1.0), input_len=2)
+
+
+class RecyclerSCRamp(Ramp):
+    """Recycler sextupole corrector ramp table (C475 CAMAC card).
+
+    Scaling: p_index=2 (raw / 3276.8), c_index=6 with C1=1.2, C2=1.0
+    Combined: engineering = 1.2 * raw / 3276.8
+    Update rate: 100 KHz fixed (10 us/tick).
+    """
+
+    update_rate_hz: ClassVar[int] = 100_000  # C475 CAMAC card: 100 KHz fixed
+    scaler: ClassVar[Scaler | None] = Scaler(p_index=2, c_index=6, constants=(1.2, 1.0), input_len=2)
+
+
+class RecyclerHVSQRamp(Ramp):
+    """Recycler H/V and skew quad corrector ramp table (453 CAMAC card).
+
+    Scaling: p_index=2 (raw / 3276.8), c_index=6 with C1=12.0, C2=10.0
+    Combined: engineering = 12.0 * raw / (3276.8 * 10.0)
+    Update rate: 720 Hz fixed (1389 us/tick).
+    """
+
+    update_rate_hz: ClassVar[int] = 720  # 453 CAMAC card: 720 Hz fixed
+    scaler: ClassVar[Scaler | None] = Scaler(p_index=2, c_index=6, constants=(12.0, 10.0), input_len=2)
+
+
+class BoosterHVRamp(Ramp):
     """Booster corrector ramp table (473 CAMAC card).
 
-    Primary transform: raw / 3276.8
-    Common transform:  primary * 4.0
-    Combined: engineering = raw / 819.2 (Amps)
+    Scaling: p_index=2 (raw / 3276.8), c_index=6 with C1=4.0, C2=1.0
+    Combined: engineering = 4.0 * raw / 3276.8
     Update rate: 100 KHz fixed (10 us/tick). One Booster cycle = 66.67 ms (15 Hz).
     Java ref: RampDevice473.UPDATE_FREQUENCY = 100000.
     """
@@ -404,22 +490,19 @@ class BoosterRamp(Ramp):
     update_rate_hz: ClassVar[int] = 100_000  # 473 CAMAC card: 100 KHz fixed, 10 us/tick
     max_value: ClassVar[float | None] = 1000.0
     max_time: ClassVar[float | None] = 66_660.0  # 6666 ticks * 10 us ≈ one Booster cycle
+    scaler: ClassVar[Scaler | None] = Scaler(p_index=2, c_index=6, constants=(4.0, 1.0), input_len=2)
 
-    @classmethod
-    def primary_transform(cls, raw: np.ndarray) -> np.ndarray:
-        return raw / 3276.8
 
-    @classmethod
-    def common_transform(cls, primary: np.ndarray) -> np.ndarray:
-        return primary * 4.0
+class BoosterQRamp(Ramp):
+    """Booster quad ramp table (C473 CAMAC card).
 
-    @classmethod
-    def inverse_common_transform(cls, common: np.ndarray) -> np.ndarray:
-        return common / 4.0
+    Scaling: p_index=2 (raw / 3276.8), c_index=6 with C1=6.5, C2=1.0
+    Combined: engineering = 6.5 * raw / 3276.8
+    Update rate: 100 KHz fixed (10 us/tick).
+    """
 
-    @classmethod
-    def inverse_primary_transform(cls, primary: np.ndarray) -> np.ndarray:
-        return primary * 3276.8
+    update_rate_hz: ClassVar[int] = 100_000  # C473 CAMAC card: 100 KHz fixed
+    scaler: ClassVar[Scaler | None] = Scaler(p_index=2, c_index=6, constants=(6.5, 1.0), input_len=2)
 
 
 class _RampModifyContext:
@@ -745,7 +828,37 @@ class _RampGroupModifyContext:
         return False
 
 
-class BoosterRampGroup(RampGroup):
-    """RampGroup for Booster correctors using BoosterRamp transforms."""
+class RecyclerQuadRampGroup(RampGroup):
+    """RampGroup for Recycler quads using RecyclerQuadRamp transforms."""
 
-    base = BoosterRamp
+    base = RecyclerQuadRamp
+
+
+class RecyclerSRampGroup(RampGroup):
+    """RampGroup for Recycler sextupoles using RecyclerSRamp transforms."""
+
+    base = RecyclerSRamp
+
+
+class RecyclerSCRampGroup(RampGroup):
+    """RampGroup for Recycler sextupole correctors using RecyclerSCRamp transforms."""
+
+    base = RecyclerSCRamp
+
+
+class RecyclerHVSQRampGroup(RampGroup):
+    """RampGroup for Recycler H/V and skew quad correctors using RecyclerHVSQRamp transforms."""
+
+    base = RecyclerHVSQRamp
+
+
+class BoosterHVRampGroup(RampGroup):
+    """RampGroup for Booster correctors using BoosterHVRamp transforms."""
+
+    base = BoosterHVRamp
+
+
+class BoosterQRampGroup(RampGroup):
+    """RampGroup for Booster quads using BoosterQRamp transforms."""
+
+    base = BoosterQRamp
