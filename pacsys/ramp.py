@@ -445,25 +445,25 @@ class RecyclerQuadRamp(Ramp):
 class RecyclerSRamp(Ramp):
     """Recycler sextupole ramp table (453 CAMAC card).
 
-    Scaling: p_index=0 (raw / 3200.0), c_index=6 with C1=1.2, C2=1.0
-    Combined: engineering = 1.2 * raw / 3200.0
+    Scaling: p_index=2 (raw / 3276.8), c_index=6 with C1=12.0, C2=10.0
+    Combined: engineering = 12.0 * raw / (3276.8 * 10.0)
     Update rate: 720 Hz fixed (1389 us/tick).
     """
 
     update_rate_hz: ClassVar[int] = 720  # 453 CAMAC card: 720 Hz fixed
-    scaler: ClassVar[Scaler | None] = Scaler(p_index=0, c_index=6, constants=(1.2, 1.0), input_len=2)
+    scaler: ClassVar[Scaler | None] = Scaler(p_index=2, c_index=6, constants=(12.0, 10.0), input_len=2)
 
 
 class RecyclerSCRamp(Ramp):
     """Recycler sextupole corrector ramp table (C475 CAMAC card).
 
-    Scaling: p_index=2 (raw / 3276.8), c_index=6 with C1=1.2, C2=1.0
-    Combined: engineering = 1.2 * raw / 3276.8
+    Scaling: p_index=2 (raw / 3276.8), c_index=6 with C1=1.2000000477, C2=1.0
+    Combined: engineering = 1.2000000477 * raw / 3276.8
     Update rate: 100 KHz fixed (10 us/tick).
     """
 
     update_rate_hz: ClassVar[int] = 100_000  # C475 CAMAC card: 100 KHz fixed
-    scaler: ClassVar[Scaler | None] = Scaler(p_index=2, c_index=6, constants=(1.2, 1.0), input_len=2)
+    scaler: ClassVar[Scaler | None] = Scaler(p_index=2, c_index=6, constants=(1.2000000477, 1.0), input_len=2)
 
 
 class RecyclerHVSQRamp(Ramp):

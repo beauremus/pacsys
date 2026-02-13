@@ -34,8 +34,8 @@ Inverse:  raw = primary_unscale(common_unscale(engineering))
 | `BoosterHVRamp` | C473 | B:HS23 | raw / 3276.8 (2) | primary × 4.0 (6, C1=4.0, C2=1.0) | raw × 4.0 / 3276.8 |
 | `BoosterQRamp` | C473 | B:QS23 | raw / 3276.8 (2) | primary × 6.5 (6, C1=6.5, C2=1.0) | raw × 6.5 / 3276.8 |
 | `RecyclerQuadRamp` | C453 | R:QT606 | raw / 3276.8 (2) | primary × 2.0 (6, C1=2.0, C2=1.0) | raw × 2.0 / 3276.8 |
-| `RecyclerSRamp` | C453 | R:S202 | raw / 3200.0 (0) | primary × 1.2 (6, C1=1.2, C2=1.0) | raw × 1.2 / 3200.0 |
-| `RecyclerSCRamp` | C475 | R:SC319 | raw / 3276.8 (2) | primary × 1.2 (6, C1=1.2, C2=1.0) | raw × 1.2 / 3276.8 |
+| `RecyclerSRamp` | C453 | R:S202T | raw / 3276.8 (2) | primary × 1.2 (6, C1=12.0, C2=10.0) | raw × 12.0 / (3276.8 × 10.0) |
+| `RecyclerSCRamp` | C475 | R:SC319 | raw / 3276.8 (2) | primary × 1.2000000477 (6, C1=1.2000000477, C2=1.0) | raw × 1.2000000477 / 3276.8 |
 | `RecyclerHVSQRamp` | C453 | R:H626, R:SQ410 | raw / 3276.8 (2) | primary × 1.2 (6, C1=12.0, C2=10.0) | raw × 12.0 / (3276.8 × 10.0) |
 
 ### Time Scaling
