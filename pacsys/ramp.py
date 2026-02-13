@@ -75,10 +75,41 @@ def _get_backend(backend: Optional["Backend"]) -> "Backend":
     return _get_global_backend()
 
 
+def _validate_device_name(drf: str) -> None:
+    """Raise ValueError if drf contains property, range, event, field, or extra.
+
+    Ramp functions build their own DRFs from the device name, so callers
+    must pass bare device names (e.g. "B:HS23T"), not full DRFs.
+    Qualifier-based names like "B_HS23T" are accepted (implicit property).
+    """
+    from pacsys.drf3 import parse_request
+
+    req = parse_request(drf)
+    if req.property_explicit:
+        raise ValueError(
+            f"Expected bare device name, got explicit property in {drf!r}. Pass only the device name (e.g. 'B:HS23T')."
+        )
+    if req.range is not None:
+        raise ValueError(
+            f"Expected bare device name, got range in {drf!r}. Pass only the device name (e.g. 'B:HS23T')."
+        )
+    if req.event is not None and req.event.mode != "U":
+        raise ValueError(
+            f"Expected bare device name, got event in {drf!r}. Pass only the device name (e.g. 'B:HS23T')."
+        )
+    if req.extra is not None:
+        raise ValueError(
+            f"Expected bare device name, got extra in {drf!r}. Pass only the device name (e.g. 'B:HS23T')."
+        )
+
+
 __all__ = [
     "Ramp",
-    "CorrectorRamp",
     "BoosterRamp",
+    "RampGroup",
+    "BoosterRampGroup",
+    "read_ramps",
+    "write_ramps",
 ]
 
 
@@ -126,10 +157,18 @@ class Ramp:
         """Convert primary units back to raw int16 values."""
         raise NotImplementedError("Subclass must implement inverse_primary_transform")
 
-    def __init__(self, values: np.ndarray, times: np.ndarray):
+    def __init__(
+        self,
+        values: np.ndarray,
+        times: np.ndarray,
+        device: str | None = None,
+        slot: int | None = None,
+    ):
         """Args:
         values: Engineering-unit amplitudes (64 points, float64).
         times: Delta times in microseconds (64 points, float64).
+        device: Canonical device name (set by read(), None from from_bytes()).
+        slot: Ramp slot index (set by read(), None from from_bytes()).
         """
         if len(values) != self.POINTS_PER_SLOT:
             raise ValueError(f"Expected {self.POINTS_PER_SLOT} values, got {len(values)}")
@@ -137,6 +176,8 @@ class Ramp:
             raise ValueError(f"Expected {self.POINTS_PER_SLOT} times, got {len(times)}")
         self.values = np.asarray(values, dtype=np.float64)
         self.times = np.asarray(times, dtype=np.float64)
+        self.device = device
+        self.slot = slot
 
     @classmethod
     def _slot_bytes(cls) -> int:
@@ -235,17 +276,19 @@ class Ramp:
         """Read a ramp table from a corrector magnet.
 
         Args:
-            device: Device name or DRF string
+            device: Bare device name DRF (e.g. "B:HS23T")
             slot: Ramp slot index (default 0)
             backend: Optional backend. If None, uses global default.
 
         Raises:
+            ValueError: If device is not a bare device name
             DeviceError: If read fails
             TypeError: If response is not bytes
         """
         from pacsys.drf_utils import get_device_name
         from pacsys.errors import DeviceError
 
+        _validate_device_name(device)
         be = _get_backend(backend)
         name = get_device_name(device)
         drf = cls._make_drf(name, slot)
@@ -256,28 +299,41 @@ class Ramp:
         if not isinstance(reading.value, bytes):
             raise TypeError(f"Expected bytes, got {type(reading.value).__name__}")
 
-        return cls.from_bytes(reading.value)
+        ramp = cls.from_bytes(reading.value)
+        ramp.device = name
+        ramp.slot = slot
+        return ramp
 
     def write(
         self,
-        device: str,
-        slot: int = 0,
+        device: str | None = None,
+        slot: int | None = None,
         backend: Optional["Backend"] = None,
-    ) -> WriteResult:
+    ) -> "WriteResult":
         """Write ramp table to a corrector magnet.
 
         Args:
-            device: Device name or DRF string
-            slot: Ramp slot index (default 0)
+            device: Bare device name DRF (e.g. "B:HS23T"). If None, uses stored device from read().
+            slot: Ramp slot index. If None, uses stored slot from read().
             backend: Optional backend. If None, uses global default.
 
         Returns:
             WriteResult from the backend
 
         Raises:
+            ValueError: If no device or slot available, or device is not a bare device name
             RuntimeError: If write fails
         """
         from pacsys.drf_utils import get_device_name
+
+        if device is not None:
+            _validate_device_name(device)
+        device = device or self.device
+        if device is None:
+            raise ValueError("No device specified and none stored from read()")
+        slot = slot if slot is not None else self.slot
+        if slot is None:
+            raise ValueError("No slot specified and none stored from read()")
 
         be = _get_backend(backend)
         name = get_device_name(device)
@@ -287,6 +343,25 @@ class Ramp:
         if not result.success:
             raise RuntimeError(f"Failed to write ramp table: {result.message}")
         return result
+
+    @classmethod
+    def read_many(
+        cls,
+        devices: list[str],
+        slot: int = 0,
+        backend: Optional["Backend"] = None,
+    ) -> list["Ramp"]:
+        """Batched read of ramp tables from multiple devices.
+
+        Args:
+            devices: List of bare device names (e.g. ["B:HS23T", "B:HS24T"])
+            slot: Ramp slot index (default 0)
+            backend: Optional backend. If None, uses global default.
+
+        Returns:
+            List of Ramp instances with .device and .slot set
+        """
+        return read_ramps(cls, devices, slot=slot, backend=backend)
 
     @classmethod
     def modify(
@@ -299,6 +374,7 @@ class Ramp:
 
         Reads on entry, writes on exit only if bytes changed.
         """
+        _validate_device_name(device)
         return _RampModifyContext(cls, device, slot, backend)
 
     def __repr__(self) -> str:
@@ -373,6 +449,8 @@ class _RampModifyContext:
 
         self._initial_bytes = reading.value
         self._ramp = self._cls.from_bytes(reading.value)
+        self._ramp.device = name
+        self._ramp.slot = self._slot
         return self._ramp
 
     def __exit__(self, exc_type, _exc_val, _exc_tb):
@@ -394,5 +472,280 @@ class _RampModifyContext:
         return False
 
 
-# Deprecated alias
-CorrectorRamp = Ramp
+def read_ramps(
+    cls: type[Ramp],
+    devices: list[str],
+    slot: int = 0,
+    backend: Optional["Backend"] = None,
+) -> list[Ramp]:
+    """Batched read of ramp tables from multiple devices.
+
+    Args:
+        cls: Ramp subclass to use for parsing
+        devices: List of bare device names (e.g. ["B:HS23T", "B:HS24T"])
+        slot: Ramp slot index (default 0)
+        backend: Optional backend. If None, uses global default.
+
+    Returns:
+        List of Ramp instances with .device and .slot set
+
+    Raises:
+        ValueError: If devices list is empty or any device is not a bare device name
+        DeviceError: If any reading is an error
+        TypeError: If any reading is not bytes
+    """
+    if not devices:
+        raise ValueError("devices list must not be empty")
+    for d in devices:
+        _validate_device_name(d)
+
+    from pacsys.drf_utils import get_device_name
+    from pacsys.errors import DeviceError
+
+    be = _get_backend(backend)
+    names = [get_device_name(d) for d in devices]
+    drfs = [cls._make_drf(name, slot) for name in names]
+
+    readings = be.get_many(drfs)
+    ramps: list[Ramp] = []
+    for reading, name in zip(readings, names):
+        if reading.is_error:
+            raise DeviceError(reading.drf, reading.facility_code, reading.error_code, reading.message)
+        if not isinstance(reading.value, bytes):
+            raise TypeError(f"Expected bytes for {name}, got {type(reading.value).__name__}")
+        ramp = cls.from_bytes(reading.value)
+        ramp.device = name
+        ramp.slot = slot
+        ramps.append(ramp)
+    return ramps
+
+
+def write_ramps(
+    ramps: "Ramp | list[Ramp] | RampGroup | list[Ramp | RampGroup]",
+    *,
+    slot: int | None = None,
+    backend: Optional["Backend"] = None,
+) -> list["WriteResult"]:
+    """Batched write of ramp tables.
+
+    Accepts a single Ramp, a list of Ramps, a RampGroup, or a mixed list.
+    All are flattened into a single write_many call.
+
+    Args:
+        ramps: Ramp(s) or RampGroup(s) to write
+        slot: Optional slot override (applies to all ramps)
+        backend: Optional backend. If None, uses global default.
+
+    Returns:
+        List of WriteResult in same order as flattened ramps
+    """
+    from pacsys.drf_utils import get_device_name
+
+    # Normalize to flat list[Ramp]
+    flat: list[Ramp] = []
+    items: list[Ramp | RampGroup] = [ramps] if isinstance(ramps, (Ramp, RampGroup)) else list(ramps)
+    for item in items:
+        if isinstance(item, RampGroup):
+            flat.extend(item._to_ramps(slot))
+        else:
+            flat.append(item)
+
+    be = _get_backend(backend)
+    settings: list[tuple[str, bytes]] = []
+    for ramp in flat:
+        dev = ramp.device
+        if dev is None:
+            raise ValueError("Ramp has no device set — read() first or set .device")
+        s = slot if slot is not None else ramp.slot
+        if s is None:
+            raise ValueError(f"No slot for device {dev} — read() first or set .slot")
+        name = get_device_name(dev)
+        drf = type(ramp)._make_drf(name, s)
+        settings.append((drf, ramp.to_bytes()))
+    return be.write_many(settings)  # type: ignore[arg-type]  # bytes is a valid Value
+
+
+class RampGroup:
+    """Group of ramp tables stored as 2D arrays (64 points x N devices).
+
+    Subclasses must set the `base` class variable to a Ramp subclass.
+    Use __getitem__ to get a view-backed Ramp for a single device.
+    """
+
+    base: ClassVar[type[Ramp]]
+
+    def __init__(
+        self,
+        devices: list[str],
+        values: np.ndarray,
+        times: np.ndarray,
+        slot: int = 0,
+    ):
+        n = len(devices)
+        if len(set(devices)) != n:
+            raise ValueError("Duplicate device names in RampGroup")
+        pts = type(self).base.POINTS_PER_SLOT
+        if values.shape != (pts, n):
+            raise ValueError(f"Expected values shape ({pts}, {n}), got {values.shape}")
+        if times.shape != (pts, n):
+            raise ValueError(f"Expected times shape ({pts}, {n}), got {times.shape}")
+        self.devices = list(devices)
+        self.values = np.asarray(values, dtype=np.float64)
+        self.times = np.asarray(times, dtype=np.float64)
+        self.slot = slot
+        self._device_map: dict[str, int] = {d: i for i, d in enumerate(devices)}
+
+    def __getitem__(self, device: str) -> Ramp:
+        idx = self._device_map[device]
+        ramp = object.__new__(self.base)
+        ramp.values = self.values[:, idx]
+        ramp.times = self.times[:, idx]
+        ramp.device = device
+        ramp.slot = self.slot
+        return ramp
+
+    def __len__(self) -> int:
+        return len(self.devices)
+
+    def __iter__(self):
+        return iter(self.devices)
+
+    def __contains__(self, device: str) -> bool:
+        return device in self._device_map
+
+    def _to_ramps(self, slot: int | None = None, devices: list[str] | None = None) -> list[Ramp]:
+        """Demux 2D arrays into individual Ramp objects."""
+        targets = devices if devices is not None else self.devices
+        target_slot = slot if slot is not None else self.slot
+        ramps: list[Ramp] = []
+        for i, dev in enumerate(targets):
+            ramp = self.base(values=self.values[:, i], times=self.times[:, i])
+            ramp.device = dev
+            ramp.slot = target_slot
+            ramps.append(ramp)
+        return ramps
+
+    @classmethod
+    def read(
+        cls,
+        devices: list[str],
+        slot: int = 0,
+        backend: Optional["Backend"] = None,
+    ) -> "RampGroup":
+        """Batched read into a RampGroup.
+
+        Args:
+            devices: List of device names
+            slot: Ramp slot index (default 0)
+            backend: Optional backend. If None, uses global default.
+        """
+        ramps = read_ramps(cls.base, devices, slot=slot, backend=backend)
+        values = np.column_stack([r.values for r in ramps])
+        times = np.column_stack([r.times for r in ramps])
+        return cls(
+            devices=[r.device for r in ramps],  # type: ignore[misc]  # read_ramps sets .device
+            values=values,
+            times=times,
+            slot=slot,
+        )
+
+    def write(
+        self,
+        *,
+        devices: list[str] | None = None,
+        slot: int | None = None,
+        backend: Optional["Backend"] = None,
+    ) -> list["WriteResult"]:
+        """Write group to devices.
+
+        Args:
+            devices: Override target device names (must match column count)
+            slot: Override slot index
+            backend: Optional backend
+        """
+        if devices is not None:
+            for d in devices:
+                _validate_device_name(d)
+        targets = devices if devices is not None else self.devices
+        if len(targets) != self.values.shape[1]:
+            raise ValueError(f"Expected {self.values.shape[1]} devices, got {len(targets)}")
+        ramps = self._to_ramps(slot, targets)
+        return write_ramps(ramps, backend=backend)
+
+    @classmethod
+    def modify(
+        cls,
+        devices: list[str],
+        slot: int = 0,
+        backend: Optional["Backend"] = None,
+    ):
+        """Context manager for batched read-modify-write.
+
+        Reads on entry, writes changed devices on exit.
+        """
+        return _RampGroupModifyContext(cls, devices, slot, backend)
+
+
+class _RampGroupModifyContext:
+    """Context manager for RampGroup read-modify-write."""
+
+    def __init__(
+        self,
+        cls: type[RampGroup],
+        devices: list[str],
+        slot: int,
+        backend: Optional["Backend"],
+    ):
+        self._cls = cls
+        self._devices = devices
+        self._slot = slot
+        self._backend = backend
+        self._group: RampGroup | None = None
+        self._initial_bytes: dict[str, bytes] = {}
+
+    def __enter__(self) -> RampGroup:
+        self._group = self._cls.read(self._devices, self._slot, self._backend)
+        # Store initial bytes per device for change detection
+        for i, dev in enumerate(self._group.devices):
+            ramp = self._cls.base(
+                values=self._group.values[:, i].copy(),
+                times=self._group.times[:, i].copy(),
+            )
+            self._initial_bytes[dev] = ramp.to_bytes()
+        return self._group
+
+    def __exit__(self, exc_type, _exc_val, _exc_tb):
+        if exc_type is not None or self._group is None:
+            return False
+
+        from pacsys.drf_utils import get_device_name
+
+        be = _get_backend(self._backend)
+        settings: list[tuple[str, bytes]] = []
+        for i, dev in enumerate(self._group.devices):
+            ramp = self._cls.base(
+                values=self._group.values[:, i],
+                times=self._group.times[:, i],
+            )
+            current_bytes = ramp.to_bytes()
+            if current_bytes != self._initial_bytes[dev]:
+                name = get_device_name(dev)
+                drf = self._cls.base._make_drf(name, self._slot)
+                settings.append((drf, current_bytes))
+
+        if settings:
+            results = be.write_many(settings)  # type: ignore[arg-type]
+            failures = [(drf, r.message) for (drf, _), r in zip(settings, results) if not r.success]
+            if failures:
+                raise RuntimeError(
+                    f"Partial write failure: {len(failures)}/{len(settings)} failed: "
+                    + ", ".join(f"{drf}: {msg}" for drf, msg in failures)
+                )
+
+        return False
+
+
+class BoosterRampGroup(RampGroup):
+    """RampGroup for Booster correctors using BoosterRamp transforms."""
+
+    base = BoosterRamp

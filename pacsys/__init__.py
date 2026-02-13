@@ -1,13 +1,6 @@
 """
 pacsys - Pure Python library for ACNET control system at Fermilab.
 
-Quick start:
-    import pacsys
-    value = pacsys.read("M:OUTTMP")
-    reading = pacsys.get("M:OUTTMP")
-    readings = pacsys.get_many(["M:OUTTMP", "G:AMANDA"])
-
-See SPECIFICATION.md for full API reference.
 """
 
 import atexit
@@ -887,8 +880,11 @@ _LAZY_IMPORTS: dict[str, str] = {
     "ScalingError": "pacsys.scaling",
     # ramp
     "Ramp": "pacsys.ramp",
-    "CorrectorRamp": "pacsys.ramp",
+    "RampGroup": "pacsys.ramp",
     "BoosterRamp": "pacsys.ramp",
+    "BoosterRampGroup": "pacsys.ramp",
+    "read_ramps": "pacsys.ramp",
+    "write_ramps": "pacsys.ramp",
     # digital_status
     "StatusBit": "pacsys.digital_status",
     "DigitalStatus": "pacsys.digital_status",
@@ -986,8 +982,11 @@ __all__ = [
     "ScalingError",
     # Ramp
     "Ramp",
-    "CorrectorRamp",
+    "RampGroup",
     "BoosterRamp",
+    "BoosterRampGroup",
+    "read_ramps",
+    "write_ramps",
     # SSH
     "SSHClient",
     "SSHHop",

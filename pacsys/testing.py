@@ -5,7 +5,7 @@ See SPECIFICATION.md for available methods and pytest fixtures.
 """
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 import queue
 import threading
 from typing import Any, Iterator, Callable
@@ -29,6 +29,7 @@ from pacsys.types import (
     ErrorCallback,
 )
 from pacsys.errors import DeviceError
+from pacsys.drf3.event import NeverEvent
 from pacsys.drf_utils import get_device_name
 
 
@@ -124,6 +125,73 @@ def _apply_range(drf: str, value: Any, rng: ARRAY_RANGE | BYTE_RANGE | None) -> 
         raise DeviceError(drf, FACILITY_ACNET, ERR_RETRY, f"Cannot apply range to stored value: {e}")
 
     return value
+
+
+def _event_offset(drf: str) -> float:
+    """Derive a deterministic numeric offset from the event in a DRF.
+
+    The offset is predictable from the event type:
+      @I          →  0     (immediate = exact)
+      @p,x / @q,x → +x/1000  (periodic rate as fraction)
+      @e,xx[,t,d] → -(evt + delay/1000) / 100  (clock event + delay)
+      @s,...      → +2.0 + hash/1000  (state event, avoids periodic range)
+      no event    →  0        (base key = exact match)
+    """
+    try:
+        req = parse_request(drf)
+    except ValueError:
+        return 0.0
+    evt = req.event
+    if evt is None or evt.mode in ("U", "I", "N"):
+        return 0.0
+    if evt.mode in ("P", "Q"):
+        return evt.freq / 1000.0
+    if evt.mode == "E":
+        return -(evt.evt + evt.delay / 1000.0) / 100.0
+    if evt.mode == "S":
+        # Use hash of raw_string to differentiate state events; +2.0 base
+        # avoids collision with periodic offsets (which are freq/1000)
+        h = sum(evt.raw_string.encode()) % 1000
+        return 2.0 + h / 1000.0
+    return 0.0
+
+
+def _perturb_value(value: Any, drf: str) -> Any:
+    """Add a deterministic event-derived offset to a numeric value.
+
+    Only perturbs float scalars and float ndarrays; all other types
+    (int, bytes, str, dict, list, None, integer arrays) pass through unchanged.
+    """
+    offset = _event_offset(drf)
+    if offset == 0.0:
+        return value
+
+    if isinstance(value, float):
+        return value + offset
+
+    try:
+        import numpy as np
+
+        if isinstance(value, np.ndarray) and np.issubdtype(value.dtype, np.floating):
+            return value + offset
+    except ImportError:
+        pass
+
+    return value
+
+
+def _perturb_timestamp(ts: datetime | None, drf: str) -> datetime | None:
+    """Add a deterministic event-derived offset to a timestamp.
+
+    Uses the same offset magnitude as value perturbation, interpreted as
+    milliseconds.  Returns None unchanged.
+    """
+    if ts is None:
+        return None
+    offset = _event_offset(drf)
+    if offset == 0.0:
+        return ts
+    return ts + timedelta(milliseconds=abs(offset))
 
 
 def _write_range(existing: Any, value: Any, rng: ARRAY_RANGE | BYTE_RANGE) -> Any:
@@ -493,13 +561,19 @@ class FakeBackend(Backend):
         self._write_history.clear()
         self.stop_streaming()
 
-    def _find_reading(self, drf: str) -> Reading | None:
-        """Lookup reading: event-specific key first, then base key."""
+    def _find_reading(self, drf: str) -> tuple[Reading | None, bool]:
+        """Lookup reading: event-specific key first, then base key.
+
+        Returns (reading, is_fallback) where is_fallback is True when the
+        reading came from the base key (event-unaware), meaning perturbation
+        should be applied.  False for exact match or miss (None).
+        """
         full = _full_key(drf)
         if full in self._readings:
-            return self._readings[full]
+            return self._readings[full], False
         base = _base_key(drf)
-        return self._readings.get(base)
+        reading = self._readings.get(base)
+        return reading, reading is not None
 
     def _find_error(self, drf: str) -> tuple[int, str] | None:
         """Lookup error: event-specific key first, then base key."""
@@ -549,8 +623,17 @@ class FakeBackend(Backend):
             DeviceError: If an error was configured or no reading exists
         """
         self._read_history.append(drf)
+
+        # @N means "never send data" — reading with it is semantically invalid
+        try:
+            req = parse_request(drf)
+            if isinstance(req.event, NeverEvent):
+                raise DeviceError(drf, FACILITY_ACNET, ERR_RETRY, "Cannot read with @N (never) event")
+        except ValueError:
+            pass
+
         error = self._find_error(drf)
-        reading = self._find_reading(drf)
+        reading, is_fallback = self._find_reading(drf)
 
         # Check for configured error
         if error is not None:
@@ -566,7 +649,10 @@ class FakeBackend(Backend):
                     reading.error_code,
                     reading.message,
                 )
-            return _apply_range(drf, reading.value, _get_range(drf))
+            value = reading.value
+            if is_fallback:
+                value = _perturb_value(value, drf)
+            return _apply_range(drf, value, _get_range(drf))
 
         # No reading configured -- distinguish property-not-found from unknown device
         if self._device_known(drf):
@@ -584,8 +670,22 @@ class FakeBackend(Backend):
             Reading object (may have is_error=True)
         """
         self._read_history.append(drf)
+
+        # @N means "never send data" — reading with it is semantically invalid
+        try:
+            req = parse_request(drf)
+            if isinstance(req.event, NeverEvent):
+                return Reading(
+                    drf=drf,
+                    value_type=ValueType.SCALAR,
+                    error_code=ERR_RETRY,
+                    message="Cannot read with @N (never) event",
+                )
+        except ValueError:
+            pass
+
         error = self._find_error(drf)
-        reading = self._find_reading(drf)
+        reading, is_fallback = self._find_reading(drf)
 
         # Check for configured error
         if error is not None:
@@ -599,11 +699,15 @@ class FakeBackend(Backend):
 
         # Check for configured reading — return with caller's DRF
         if reading is not None:
-            rng = _get_range(drf)
             value = reading.value
+            timestamp = reading.timestamp
+            if is_fallback:
+                value = _perturb_value(value, drf)
+                timestamp = _perturb_timestamp(timestamp, drf)
+            rng = _get_range(drf)
             if rng is not None and value is not None:
                 value = _apply_range(drf, value, rng)
-            return replace(reading, drf=drf, value=value)
+            return replace(reading, drf=drf, value=value, timestamp=timestamp)
 
         # No reading configured -- distinguish property-not-found from unknown device
         if self._device_known(drf):
@@ -673,9 +777,16 @@ class FakeBackend(Backend):
 
         If the write DRF includes a range and an existing array is stored,
         performs a slice assignment instead of replacing the whole value.
+
+        Updates both the base key and the event-specific full key so that
+        subsequent reads (which check the full key first) see the write.
         """
-        # Clear any error -- device is now responsive
+        full = _full_key(drf)
+
+        # Clear errors for both keys -- device is now responsive
         self._errors.pop(key, None)
+        if full != key:
+            self._errors.pop(full, None)
 
         rng = _get_range(drf)
         merged = value
@@ -687,10 +798,10 @@ class FakeBackend(Backend):
 
         if key in self._readings:
             old = self._readings[key]
-            self._readings[key] = replace(old, value=merged, error_code=ERR_OK, timestamp=datetime.now())
+            updated = replace(old, value=merged, error_code=ERR_OK, timestamp=datetime.now())
         else:
             device_name = get_device_name(drf)
-            self._readings[key] = Reading(
+            updated = Reading(
                 drf=drf,
                 value_type=ValueType.SCALAR,
                 value=value,
@@ -702,6 +813,10 @@ class FakeBackend(Backend):
                     description=f"Test device {device_name}",
                 ),
             )
+
+        self._readings[key] = updated
+        if full != key:
+            self._readings[full] = updated
 
     def write_many(
         self,

@@ -13,7 +13,7 @@ Tests cover:
 import threading
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timedelta
 import numpy as np
 
 from pacsys.acnet.errors import ERR_NOPROP, ERR_RETRY, FACILITY_DBM
@@ -776,9 +776,10 @@ class TestDRFNormalization:
     """
 
     def test_short_form_matches_full_read_drf(self):
-        """set_reading('M:OUTTMP') matches read('M:OUTTMP.READING@I')."""
+        """set_reading('M:OUTTMP') matches read('M:OUTTMP.READING@I') exactly."""
         fake = FakeBackend()
         fake.set_reading("M:OUTTMP", 72.5)
+        # @I has zero offset, so value is exact even on fallback
         assert fake.read("M:OUTTMP.READING@I") == 72.5
 
     def test_full_form_matches_short_read(self):
@@ -795,12 +796,13 @@ class TestDRFNormalization:
         assert not result.success
 
     def test_all_events_same_device(self):
-        """@I, @N, @p,1000 all reference the same device state when set without event."""
+        """@I and @p,1000 both fall back to base key with distinct offsets."""
         fake = FakeBackend()
         fake.set_reading("M:OUTTMP", 72.5)
-        assert fake.read("M:OUTTMP.READING@I") == 72.5
-        assert fake.read("M:OUTTMP.READING@p,1000") == 72.5
-        assert fake.read("M:OUTTMP.READING@N") == 72.5
+        val_i = fake.read("M:OUTTMP.READING@I")
+        val_p = fake.read("M:OUTTMP.READING@p,1000")
+        assert val_i == 72.5  # @I offset is 0
+        assert val_p == 72.5 + 1.0  # @p,1000 offset is +1000/1000
 
     def test_same_device_different_events_discriminated(self):
         """Event-specific set_reading entries are kept separate."""
@@ -826,9 +828,9 @@ class TestDRFNormalization:
         fake = FakeBackend()
         fake.set_reading("M:OUTTMP@p,500", 1.0)
         fake.set_reading("M:OUTTMP@e,02", 2.0)
-        # Base key was updated by last set_reading, so eventless read gets 2.0
+        # Base key was updated by last set_reading, so eventless read gets exact 2.0
         assert fake.read("M:OUTTMP") == 2.0
-        # Unregistered event also falls back to base
+        # @I has zero offset, so fallback is exact
         assert fake.read("M:OUTTMP@I") == 2.0
 
     def test_error_normalization(self):
@@ -890,6 +892,7 @@ class TestWriteUpdatesState:
         fake = FakeBackend()
         fake.set_reading("M:OUTTMP.SETTING", 50.0)
         fake.write("M:OUTTMP.SETTING@N", 72.5)
+        # @I has zero offset, so cross-event read is exact
         assert fake.read("M:OUTTMP.SETTING@I") == 72.5
 
     def test_write_creates_state(self):
@@ -922,6 +925,20 @@ class TestWriteUpdatesState:
         assert reading.value == 72.5
         assert reading.meta.units == "degF"
         assert reading.meta.description == "Temp"
+
+    def test_write_then_read_same_event(self):
+        """Write updates full-key entry so same-event reads see the update."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP.SETTING@I", 50.0)
+        fake.write("M:OUTTMP.SETTING@I", 72.5)
+        assert fake.read("M:OUTTMP.SETTING@I") == 72.5
+
+    def test_write_clears_error_with_event(self):
+        """Write clears error stored under event-specific full key."""
+        fake = FakeBackend()
+        fake.set_error("M:OUTTMP.SETTING@I", -1, "Offline")
+        fake.write("M:OUTTMP.SETTING@I", 72.5)
+        assert fake.read("M:OUTTMP.SETTING@I") == 72.5
 
     def test_ranged_write_slice_assigns(self):
         """Write to a ranged DRF updates only that slice of the stored array."""
@@ -957,6 +974,7 @@ class TestDeviceIntegration:
         dev = Device("M:OUTTMP", backend=fake)
         fake.set_reading("M:OUTTMP", 72.5)
 
+        # Device.read() uses @I internally → zero offset → exact
         assert dev.read() == 72.5
 
     def test_scalar_device_with_fake_backend(self):
@@ -1506,3 +1524,194 @@ class TestFakeBackendDispatchMode:
         assert tids[0] != threading.current_thread().ident
         handle.stop()
         fake.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Event Perturbation Tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestEventPerturbation:
+    """Tests for deterministic event-based value/timestamp perturbation.
+
+    Offset scheme:
+      @I          →  0        (immediate = exact)
+      @p,x / @q,x → +x/1000  (periodic rate)
+      @e,xx[,t,d] → -(evt + delay/1000) / 100
+      @s,...      → +2.0 + hash/1000  (avoids periodic range)
+    """
+
+    def test_exact_match_unperturbed(self):
+        """Exact event match returns the configured value unchanged."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP@p,1000", 72.5)
+        assert fake.read("M:OUTTMP@p,1000") == 72.5
+
+    def test_exact_match_get_unperturbed(self):
+        """Exact event match via get() returns unperturbed value and timestamp."""
+        fake = FakeBackend()
+        ts = datetime(2025, 6, 1, 12, 0, 0)
+        fake.set_reading("M:OUTTMP@p,1000", 72.5, timestamp=ts)
+        reading = fake.get("M:OUTTMP@p,1000")
+        assert reading.value == 72.5
+        assert reading.timestamp == ts
+
+    def test_eventless_read_is_exact(self):
+        """Reading without event matches the base key exactly (no perturbation)."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP", 72.5)
+        assert fake.read("M:OUTTMP") == 72.5
+
+    def test_immediate_event_zero_offset(self):
+        """@I has zero offset — value is exact even on fallback."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP", 72.5)
+        assert fake.read("M:OUTTMP@I") == 72.5
+
+    def test_periodic_offset(self):
+        """@p,x adds +x/1000 offset on fallback."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP", 72.5)
+        assert fake.read("M:OUTTMP@p,1000") == 72.5 + 1.0
+        assert fake.read("M:OUTTMP@p,500") == 72.5 + 0.5
+        assert fake.read("M:OUTTMP@p,15") == 72.5 + 0.015
+
+    def test_periodic_q_offset(self):
+        """@q,x (one-shot periodic) uses same offset as @p,x."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP", 72.5)
+        assert fake.read("M:OUTTMP@q,2000") == 72.5 + 2.0
+
+    def test_clock_event_offset(self):
+        """@e,xx adds -(evt + delay/1000)/100 offset on fallback."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP", 100.0)
+        # @e,02 → evt=2, delay=0 → -2/100 = -0.02
+        assert fake.read("M:OUTTMP@e,02") == 100.0 - 0.02
+        # @e,0F → evt=15, delay=0 → -15/100 = -0.15
+        assert fake.read("M:OUTTMP@e,0F") == 100.0 - 0.15
+
+    def test_clock_event_delay_differentiates(self):
+        """@e,xx,t,delay uses delay to produce distinct offsets."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP", 100.0)
+        # @e,02,E,0 → -(2 + 0/1000)/100 = -0.02
+        val_no_delay = fake.read("M:OUTTMP@e,02,E,0")
+        # @e,02,E,500 → -(2 + 500/1000)/100 = -0.025
+        val_with_delay = fake.read("M:OUTTMP@e,02,E,500")
+        assert val_no_delay != val_with_delay
+        assert val_no_delay == 100.0 - 0.02
+        assert val_with_delay == 100.0 - 0.025
+
+    def test_state_event_offset(self):
+        """@s,... events produce offsets >= 2.0, avoiding periodic range."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP", 100.0)
+        val = fake.read("M:OUTTMP@s,M:OTHER,1,value,=")
+        assert val >= 102.0  # base offset is 2.0+
+
+    def test_different_state_events_different_offsets(self):
+        """Distinct state events produce different offsets."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP", 100.0)
+        val1 = fake.read("M:OUTTMP@s,M:OTHER,1,value,=")
+        val2 = fake.read("M:OUTTMP@s,M:OTHER,2,value,!=")
+        assert val1 != val2
+
+    def test_periodic_perturbs_float_ndarray(self):
+        """Float ndarray gets uniform offset on fallback."""
+        fake = FakeBackend()
+        arr = np.array([1.0, 2.0, 3.0])
+        fake.set_reading("M:OUTTMP", arr)
+        result = fake.read("M:OUTTMP@p,1000")
+        np.testing.assert_array_equal(result, arr + 1.0)
+
+    def test_no_perturb_int(self):
+        """Integer values are not perturbed."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP", 42)
+        assert fake.read("M:OUTTMP@p,1000") == 42
+
+    def test_no_perturb_bytes(self):
+        """Bytes values are not perturbed."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP", b"\x01\x02\x03")
+        assert fake.read("M:OUTTMP@p,1000") == b"\x01\x02\x03"
+
+    def test_no_perturb_str(self):
+        """String values are not perturbed."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP", "hello")
+        assert fake.read("M:OUTTMP@p,1000") == "hello"
+
+    def test_no_perturb_dict(self):
+        """Dict values are not perturbed."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP", {"on": True, "ready": False})
+        assert fake.read("M:OUTTMP@p,1000") == {"on": True, "ready": False}
+
+    def test_no_perturb_integer_ndarray(self):
+        """Integer ndarray is not perturbed."""
+        fake = FakeBackend()
+        arr = np.array([1, 2, 3])
+        fake.set_reading("M:OUTTMP", arr)
+        np.testing.assert_array_equal(fake.read("M:OUTTMP@p,1000"), arr)
+
+    def test_different_events_different_offsets(self):
+        """Different periodic rates produce different offsets."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP", 72.5)
+        val_p1000 = fake.read("M:OUTTMP@p,1000")
+        val_p900 = fake.read("M:OUTTMP@p,900")
+        assert val_p1000 == 72.5 + 1.0
+        assert val_p900 == 72.5 + 0.9
+        assert val_p1000 != val_p900
+
+    def test_same_event_deterministic(self):
+        """Same event always produces the same offset."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP", 72.5)
+        val1 = fake.read("M:OUTTMP@p,1000")
+        val2 = fake.read("M:OUTTMP@p,1000")
+        assert val1 == val2
+
+    def test_timestamp_offset_on_fallback(self):
+        """Timestamp gets an offset equal to abs(value_offset) in milliseconds."""
+        fake = FakeBackend()
+        ts = datetime(2025, 6, 1, 12, 0, 0)
+        fake.set_reading("M:OUTTMP", 72.5, timestamp=ts)
+        # @p,1000 → offset 1.0 → timestamp +1.0ms
+        reading = fake.get("M:OUTTMP@p,1000")
+        assert reading.timestamp == ts + timedelta(milliseconds=1.0)
+
+    def test_timestamp_not_offset_for_immediate(self):
+        """@I fallback does not shift timestamp (zero offset)."""
+        fake = FakeBackend()
+        ts = datetime(2025, 6, 1, 12, 0, 0)
+        fake.set_reading("M:OUTTMP", 72.5, timestamp=ts)
+        reading = fake.get("M:OUTTMP@I")
+        assert reading.timestamp == ts
+
+    def test_error_reading_passthrough(self):
+        """Error readings pass through without perturbation."""
+        fake = FakeBackend()
+        fake.set_error("M:OUTTMP", -42, "Device error")
+        reading = fake.get("M:OUTTMP@p,1000")
+        assert reading.is_error
+        assert reading.error_code == -42
+
+    def test_never_event_read_raises(self):
+        """read() with @N raises DeviceError."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP", 72.5)
+        with pytest.raises(DeviceError) as exc_info:
+            fake.read("M:OUTTMP@N")
+        assert "@N" in exc_info.value.message
+
+    def test_never_event_get_returns_error(self):
+        """get() with @N returns an error Reading."""
+        fake = FakeBackend()
+        fake.set_reading("M:OUTTMP", 72.5)
+        reading = fake.get("M:OUTTMP@N")
+        assert reading.is_error
+        assert "@N" in reading.message
