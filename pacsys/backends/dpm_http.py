@@ -359,7 +359,7 @@ class _WriteConnection:
     Reuse flow: StopList -> ClearList -> AddToList -> StartList -> ApplySettings
     """
 
-    def __init__(self, conn: DPMConnection, principal: str, role: str):
+    def __init__(self, conn: DPMConnection, principal: str, role: Optional[str]):
         self.conn = conn
         self.principal = principal
         self.role = role
@@ -535,7 +535,7 @@ class DPMHTTPBackend(Backend):
 
     Capabilities:
         - READ: Always enabled
-        - WRITE: Enabled when auth is KerberosAuth and role is set
+        - WRITE: Enabled when auth is KerberosAuth (role optional — console class writes don't need it)
         - STREAM: Always enabled (multiple independent subscriptions)
         - AUTH_KERBEROS: Enabled when auth is KerberosAuth
         - BATCH: Always enabled (get_many)
@@ -602,8 +602,8 @@ class DPMHTTPBackend(Backend):
         self._write_idle_timeout = 60.0  # Close connections idle > 60s
         self._write_in_flight = 0  # Connections currently checked out for writes
 
-        # Validate auth eagerly (fail fast)
-        if self._auth is not None:
+        # Validate auth eagerly — but skip for lazy auth (validated on first write)
+        if self._auth is not None and not getattr(self._auth, "_lazy", False):
             _ = self._auth.principal  # This validates credentials
 
         logger.debug(
@@ -617,9 +617,7 @@ class DPMHTTPBackend(Backend):
         caps = BackendCapability.READ | BackendCapability.BATCH | BackendCapability.STREAM
 
         if isinstance(self._auth, KerberosAuth):
-            caps |= BackendCapability.AUTH_KERBEROS
-            if self._role is not None:
-                caps |= BackendCapability.WRITE
+            caps |= BackendCapability.AUTH_KERBEROS | BackendCapability.WRITE
 
         return caps
 
@@ -876,7 +874,7 @@ class DPMHTTPBackend(Backend):
         # Phase 2: create GSSAPI context with server's actual service name
         service_name = gssapi.Name(gss_name, gssapi.NameType.kerberos_principal)
 
-        creds = gssapi.creds.Credentials(usage="initiate")
+        creds = self._auth._get_credentials()
         ctx = gssapi.SecurityContext(
             name=service_name,
             usage="initiate",
@@ -995,14 +993,7 @@ class DPMHTTPBackend(Backend):
         conn = DPMConnection(host=self._host, port=self._port, timeout=self._timeout)
         try:
             conn.connect()
-        except Exception:
-            with self._write_lock:
-                self._write_in_flight -= 1
-            raise
-        wc = _WriteConnection(conn, self._auth.principal, self._role)  # type: ignore[arg-type]  # narrowed by assert above
-
-        # Authenticate the new connection
-        try:
+            wc = _WriteConnection(conn, self._auth.principal, self._role)
             mic, message = self._authenticate_connection(conn)
             self._enable_settings(conn, mic, message)
             wc.authenticated = True
@@ -1010,7 +1001,7 @@ class DPMHTTPBackend(Backend):
         except Exception:
             with self._write_lock:
                 self._write_in_flight -= 1
-            wc.close()
+            conn.close()
             raise
 
         return wc
@@ -1199,12 +1190,13 @@ class DPMHTTPBackend(Backend):
         clear_req.list_id = list_id
         setup_msgs.append(clear_req)
 
-        # Set ROLE list property
-        role_req = AddToList_request()
-        role_req.list_id = list_id
-        role_req.ref_id = 0
-        role_req.drf_request = f"#ROLE:{self._role}"
-        setup_msgs.append(role_req)
+        # Set ROLE list property (optional — console class writes don't need it)
+        if self._role is not None:
+            role_req = AddToList_request()
+            role_req.list_id = list_id
+            role_req.ref_id = 0
+            role_req.drf_request = f"#ROLE:{self._role}"
+            setup_msgs.append(role_req)
 
         # Add devices to list
         for i, (drf, _) in enumerate(prepared_settings):
@@ -1319,9 +1311,6 @@ class DPMHTTPBackend(Backend):
         if not isinstance(self._auth, KerberosAuth):
             raise AuthenticationError("Backend not configured for authenticated operations. Pass auth=KerberosAuth().")
 
-        if self._role is None:
-            raise AuthenticationError("Role required for writes. Pass role='Operator' (or appropriate role).")
-
         effective_timeout = timeout if timeout is not None else self._timeout
 
         # Prepare settings (add .SETTING and @I if needed)
@@ -1335,6 +1324,8 @@ class DPMHTTPBackend(Backend):
 
             try:
                 wc = self._get_write_connection()
+            except (AuthenticationError, ImportError):
+                raise
             except Exception as e:
                 error_msg = f"Failed to get write connection: {e}"
                 return [

@@ -47,24 +47,28 @@ class KerberosAuth(Auth):
     so the same KerberosAuth instance can be used across multiple
     backends and services.
 
+    Args:
+        name: Kerberos principal to use (e.g., "user2@FNAL.GOV").
+              If None, uses the default principal from the credential cache.
+
     Example:
+        # Default principal
         auth = KerberosAuth()
-        print(f"Authenticated as: {auth.principal}")
 
-        # Use with DPM backend
-        backend = DPMHTTPBackend(auth=auth, role="testing")
-
-        # Same auth works with SSH client
-        # ssh_client = SSHClient("host.fnal.gov", auth=auth)
+        # Specific principal (e.g., multiple tickets in cache)
+        auth = KerberosAuth(name="operator@FNAL.GOV")
 
     Note:
         Credentials are validated at construction time (fail fast).
     """
 
+    name: Optional[str] = None
+    _lazy: bool = field(default=False, repr=False, compare=False)
+
     def __post_init__(self):
         """Validate credentials at construction time (fail fast)."""
-        # This will raise ImportError or AuthenticationError if invalid
-        _ = self._get_credentials()
+        if not self._lazy:
+            _ = self._get_credentials()
 
     @property
     def auth_type(self) -> str:
@@ -94,9 +98,16 @@ class KerberosAuth(Auth):
         from pacsys.errors import AuthenticationError
 
         try:
-            creds = gssapi.Credentials(usage="initiate")
-        except gssapi.exceptions.GSSError as e:  # type: ignore[possibly-missing-attribute]
-            raise AuthenticationError(f"No valid Kerberos credentials. Run 'kinit' first. Error: {e}")
+            kwargs: dict = {"usage": "initiate"}
+            if self.name is not None:
+                kwargs["name"] = gssapi.Name(self.name, name_type=gssapi.NameType.kerberos_principal)
+            creds = gssapi.Credentials(**kwargs)
+        except Exception as e:
+            if self.name is not None:
+                raise AuthenticationError(
+                    f"No valid Kerberos credentials for {self.name}. Run 'kinit {self.name}' first. Error: {e}"
+                ) from e
+            raise AuthenticationError(f"No valid Kerberos credentials. Run 'kinit' first. Error: {e}") from e
 
         principal_parts = str(creds.name).split("@")
         if len(principal_parts) != 2:

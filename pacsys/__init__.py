@@ -293,8 +293,7 @@ def _create_global_dpm(timeout: float) -> "DPMHTTPBackend":
         _config_pool_size if _config_pool_size is not None else (_env_pool_size if _env_pool_size is not None else 4)
     )
     kwargs: dict = dict(host=host, port=port, pool_size=pool_size, timeout=timeout)
-    if _config_auth is not None:
-        kwargs["auth"] = _config_auth
+    kwargs["auth"] = _config_auth if _config_auth is not None else KerberosAuth(_lazy=True)
     if _config_role is not None:
         kwargs["role"] = _config_role
     return _track(DPMHTTPBackend(**kwargs))
@@ -465,6 +464,53 @@ def get_many(
     drfs = [_resolve_drf(d) for d in devices]
     backend = _get_global_backend()
     return backend.get_many(drfs, timeout=timeout)
+
+
+def write(device: DeviceSpec, value: Value, timeout: Optional[float] = None) -> WriteResult:
+    """Write a single device value using the global backend.
+
+    Args:
+        device: DRF string or Device object
+        value: Value to write
+        timeout: Total timeout in seconds
+
+    Returns:
+        WriteResult with status
+
+    Raises:
+        AuthenticationError: If no auth configured (use configure(auth=...))
+        DeviceError: If the write fails
+
+    Thread Safety:
+        Safe to call from multiple threads.
+    """
+    drf = _resolve_drf(device)
+    backend = _get_global_backend()
+    return backend.write(drf, value, timeout=timeout)
+
+
+def write_many(
+    settings: list[tuple[DeviceSpec, Value]],
+    timeout: Optional[float] = None,
+) -> list[WriteResult]:
+    """Write multiple device values in a single batch using the global backend.
+
+    Args:
+        settings: List of (device, value) tuples
+        timeout: Total timeout for entire batch in seconds
+
+    Returns:
+        List of WriteResult objects in same order as input.
+
+    Raises:
+        AuthenticationError: If no auth configured (use configure(auth=...))
+
+    Thread Safety:
+        Safe to call from multiple threads.
+    """
+    resolved = [(_resolve_drf(d), v) for d, v in settings]
+    backend = _get_global_backend()
+    return backend.write_many(resolved, timeout=timeout)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1008,6 +1054,8 @@ __all__ = [
     "read",
     "get",
     "get_many",
+    "write",
+    "write_many",
     # Streaming API functions
     "subscribe",
     # Configuration

@@ -20,6 +20,7 @@ from pacsys import (
     Device,
     ScalarDevice,
     DeviceError,
+    KerberosAuth,
     Reading,
 )
 from pacsys.backends.dpm_http import DPMHTTPBackend
@@ -403,12 +404,13 @@ class TestGlobalBackendInitialization:
 
             pacsys._get_global_backend()
 
-        MockBackend.assert_called_once_with(
-            host="custom.fnal.gov",
-            port=7000,
-            pool_size=8,
-            timeout=30.0,
-        )
+        MockBackend.assert_called_once()
+        call_kwargs = MockBackend.call_args[1]
+        assert call_kwargs["host"] == "custom.fnal.gov"
+        assert call_kwargs["port"] == 7000
+        assert call_kwargs["pool_size"] == 8
+        assert call_kwargs["timeout"] == 30.0
+        assert isinstance(call_kwargs["auth"], KerberosAuth)
 
     def test_backend_reused_on_subsequent_calls(self):
         """Backend is reused on subsequent calls."""

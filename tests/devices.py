@@ -319,7 +319,7 @@ class MockGSSAPIContext:
 class _MockCredsModule:
     """Mock gssapi.creds module."""
 
-    Credentials = staticmethod(lambda usage=None: MockGSSAPICredentials())
+    Credentials = staticmethod(lambda usage=None, name=None: MockGSSAPICredentials(name=name or "user@FNAL.GOV"))
 
 
 class MockGSSAPIModule:
@@ -356,7 +356,7 @@ class MockGSSAPIModule:
 
     creds = _MockCredsModule()
     Name = staticmethod(lambda name, name_type=None: name)
-    Credentials = staticmethod(lambda usage=None: MockGSSAPICredentials())
+    Credentials = staticmethod(lambda usage=None, name=None: MockGSSAPICredentials(name=name or "user@FNAL.GOV"))
     SecurityContext = MockGSSAPIContext
 
 

@@ -544,7 +544,7 @@ class DMQBackend(Backend):
         # Cache local IP (used in INIT, SETTING messages)
         self._local_ip = _get_host_address()
 
-        # Validate auth eagerly (fail fast)
+        # Validate auth eagerly — DMQ requires auth for all operations
         if self._auth is not None:
             _ = self._auth.principal  # This validates credentials
 
@@ -894,9 +894,11 @@ class DMQBackend(Backend):
 
         try:
             name = gssapi.Name(DMQ_SERVICE_PRINCIPAL, gssapi.NameType.kerberos_principal)
+            creds = self._auth._get_credentials()
             ctx = gssapi.SecurityContext(
                 name=name,
                 usage="initiate",
+                creds=creds,
                 flags=(
                     gssapi.RequirementFlag.integrity
                     | gssapi.RequirementFlag.replay_detection
@@ -1207,6 +1209,17 @@ class DMQBackend(Backend):
         try:
             ctx = self._create_gss_context()
             token = ctx.step()
+        except (AuthenticationError, ImportError) as exc:
+            # Auth/import errors propagate to caller via tracker.abort()
+            logger.error(f"GSS auth failed for {device}: {exc}")
+            try:
+                if channel.is_open:
+                    channel.close()
+            except Exception:
+                pass
+            for _, _, q_tracker in queued_writes:
+                q_tracker.abort(exc)
+            return
         except Exception as exc:
             logger.error(f"GSS context creation failed for {device}: {exc}")
             try:

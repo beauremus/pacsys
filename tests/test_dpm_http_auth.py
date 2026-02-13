@@ -116,23 +116,6 @@ class TestWriteWithoutAuth:
             backend.close()
 
 
-class TestWriteWithAuthNoRole:
-    """Tests for write operations with auth but no role."""
-
-    def test_write_raises_role_error(self):
-        """Test that write with auth but no role raises AuthenticationError."""
-        mock_gssapi = MockGSSAPIModule()
-
-        with mock.patch.dict("sys.modules", {"gssapi": mock_gssapi}):
-            auth = KerberosAuth()
-            backend = DPMHTTPBackend(auth=auth)
-            try:
-                with pytest.raises(AuthenticationError, match="Role required"):
-                    backend.write("M:OUTTMP", 72.5)
-            finally:
-                backend.close()
-
-
 class TestWriteSuccess:
     """Tests for successful write operations."""
 
