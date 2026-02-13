@@ -65,7 +65,7 @@ d = status.to_dict()
 # {"On": "No", "Ready": "Yes", "Polarity": "Minus", ...}
 ```
 
-### Legacy Attributes
+### Convenience Attributes
 
 `DigitalStatus` exposes the five standard attributes as `bool | None`:
 

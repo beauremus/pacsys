@@ -2,16 +2,16 @@
 
 ## What is PACSys?
 
-PACSys is a Python library that lets you interact with ACNET (aka ACSys) without needing to understand the underlying protocols. It provides a synchronous API with async internals to enable performance Python scripting.
+PACSys is a Python library that lets you interact with ACNET (aka ACSys) without needing to understand the underlying protocols. It provides a synchronous API with async internals to enable high-performance Python scripting.
 
-High level features:
+High-level features:
 
 - **Read/Stream** device values (regular and Fast Time Plot)
 - **Write** settings (with proper authorization)
-- **Full data type support** - alarm, status, etc.
+- **Full data type support** -- alarm, status, etc.
 - **Notebook-friendly sync API** (async internals, sync public interface)
 
-Low level features:
+Low-level features:
 
 - **Raw ACNET UDP/TCP** - talk to tasks like a civilized member of ACNET society (via acnetd TCP/UDP)
 - **FTPMAN implemented for snapshots** - yes, really
@@ -39,37 +39,32 @@ flowchart LR
     F --> C
 ```
 
-## Backends
-
-PACSys connects to services using backends:
-
-| Backend | Protocol | Auth Required |
-|---------|----------|---------------|
-| **DPM/HTTP** | TCP + binary protocol | Kerberos (for writes) |
-| **DPM/gRPC** | TCP + gRPC | JWT token (for writes) |
-| **DMQ** | TCP + AMQP + binary protocol | Kerberos (mandatory) |
-| **ACL/HTTP** | TCP + HTTP/CGI | None (read-only) |
-| **SSH utilities** | TCP + SSH | Kerberos (mandatory) |
-
-See [Backends](backends/index.md) for details.
-
-## Backend API
+## Quick Example
 
 ```python
 import pacsys
 
-# Read device immediately
-temperature = pacsys.read("M:OUTTMP")
+# Read immediately
+temperature = pacsys.read("M:OUTTMP@I")         #  72.5
 print(f"Temperature: {temperature}")
 
-# Stream data
+# Stream
 with pacsys.subscribe(["M:OUTTMP@p,1000"]) as stream:
     for reading, _ in stream.readings(timeout=30):
         print(f"{reading.name}: {reading.value}")
 
-# Write (requires authentication)
-from pacsys import KerberosAuth
-with pacsys.dpm(auth=KerberosAuth(), role="testing") as backend:
+# Write (tries default auth like default kerberos ticket)
+pacsys.write("Z:ACLTST", 72.5)
+```
+
+## Backend API
+To gain more control over how and where requests go, use backend API.
+
+```python
+# Specify DPM/HTTP backend with specific kerberos principal and role
+with pacsys.dpm(auth=pacsys.KerberosAuth(), role="testing") as backend:
+    temperature = backend.read("M:OUTTMP")
+    print(f"Temperature: {temperature}")
     backend.write("Z:ACLTST", 72.5)
 ```
 
@@ -109,6 +104,20 @@ sliced = dev.with_range(0, 10)
 ```
 
 See the [Device API guide](guide/device-api.md) for full documentation.
+
+## Backends
+
+PACSys connects to services using backends:
+
+| Backend | Protocol | Auth Required |
+|---------|----------|---------------|
+| **DPM/HTTP** | TCP + binary protocol | Kerberos (for writes) |
+| **DPM/gRPC** | TCP + gRPC | JWT token (for writes) |
+| **DMQ** | TCP + AMQP + binary protocol | Kerberos (mandatory) |
+| **ACL/HTTP** | TCP + HTTP/CGI | None (read-only) |
+| **SSH utilities** | TCP + SSH | Kerberos (mandatory) |
+
+See [Backends](backends/index.md) for details.
 
 ## Installation
 

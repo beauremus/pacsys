@@ -77,8 +77,27 @@ Invalid fields raise `ValueError`:
 
 ```python
 dev.read(field="on")      # ValueError: 'on' not allowed for READING
-dev.status(field="raw")   # OK - RAW is allowed for STATUS
 ```
+
+---
+
+## Device Metadata
+
+Fetch device information from DevDB (scaling parameters, limits, control commands, status bit definitions):
+
+```python
+dev = Device("M:OUTTMP")
+info = dev.info()
+
+print(info.description)                # "OUTSIDE TEMPERATURE"
+print(info.reading.common_units)       # "DegF"
+print(info.reading.p_index)            # Primary transform index
+```
+
+`info()` returns a `DeviceInfoResult` with fields: `device_index`, `description`, `reading` (`PropertyInfo`), `setting` (`PropertyInfo`), `control`, `status_bits`. Results are cached.
+
+!!! note "Requires DevDB"
+    DevDB connects to `ad-services.fnal.gov/services.devdb` by default. Override with `pacsys.configure(devdb_host=...)` or the `PACSYS_DEVDB_HOST` environment variable.
 
 ---
 
@@ -189,8 +208,11 @@ assert result.verified
 |-------|------|-------------|
 | `drf` | `str` | DRF that was written |
 | `success` | `bool` | True if error_code == 0 |
+| `facility_code` | `int` | ACNET facility code |
+| `error_code` | `int` | 0 = success, <0 = error |
+| `message` | `str \| None` | Error message (if failed) |
 | `verified` | `bool \| None` | True=matched, False=failed, None=no verify |
-| `readback` | `Value \| None` | Last readback value |
+| `readback` | `float \| str \| bytes \| ... \| None` | Last readback value |
 | `skipped` | `bool` | True if check_first found value correct |
 | `attempts` | `int` | Number of readback attempts made |
 

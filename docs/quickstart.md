@@ -134,7 +134,7 @@ re-configuring with `configure()`).
 | `PACSYS_DMQ_HOST` | RabbitMQ broker host | appsrv2.fnal.gov |
 | `PACSYS_DMQ_PORT` | RabbitMQ broker port | 5672 |
 | `PACSYS_POOL_SIZE` | DPM connection pool size | 4 |
-| `PACSYS_DEVDB_HOST` | DevDB gRPC hostname | localhost |
+| `PACSYS_DEVDB_HOST` | DevDB gRPC hostname | ad-services.fnal.gov/services.devdb |
 | `PACSYS_DEVDB_PORT` | DevDB gRPC port | 6802 |
 
 ---

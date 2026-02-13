@@ -1,6 +1,6 @@
 # DMQ
 
-RabbitMQ-based backend that communicates with ACNET via the DMQ impl1 server (DataBroker/Bunny OAC/DAE). Uses AMQP protocol with SDD binary encoding.
+RabbitMQ-based backend that communicates with ACNET via the DMQ server (DataBroker/Bunny OAC/DAE). Uses AMQP protocol with SDD (Self-Describing Data) binary encoding.
 
 ```mermaid
 sequenceDiagram
@@ -119,14 +119,14 @@ in its setter registry. A mismatch means "invalid request".
 
 ### 4. The Response
 
-The impl1 server sends back one R-keyed response on your exchange:
+The DMQ server sends back one R-keyed response on your exchange:
 
 ```
 R.Z:ACLTST.SETTING@N  →  DoubleSample { value: 45.0 }    ← actual result
                      (or)  ErrorSample { error: -98 }      ← if something went wrong
 ```
 
-The R-keyed reply is the authoritative result from ACNET. Note that impl1
+The R-keyed reply is the authoritative result from ACNET. Note that the DMQ server
 sends `correlationId=""` (empty) on write responses, so the client uses
 FIFO ordering to match responses to pending writes.
 
@@ -138,7 +138,7 @@ FIFO ordering to match responses to pending writes.
 | `DMQ_SECURITY_VIOLATION` | -99 | MIC signature verification failed (wrong sign format) |
 | `DMQ_PENDING` | 1 | Not an error - INIT still processing, wait for final status |
 
-For writes, impl1 sends PENDING only after full job creation (`InitTask.run`),
+For writes, the server sends PENDING only after full job creation (`InitTask.run`),
 which includes ACNET backend setup. This can take up to 5s (`CLIENT_INIT_RATE`).
 For reads, PENDING is sent immediately.
 

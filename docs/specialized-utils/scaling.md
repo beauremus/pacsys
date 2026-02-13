@@ -1,10 +1,10 @@
 # Scaling Transforms
 
-ACNET scaling system is a the two-stage pipeline that converts raw device integers to engineering units and back. PACSys provides a client-side implementationthat mirrors Java DPM scaling service.
+The ACNET scaling system is a two-stage pipeline that converts raw device integers to engineering units and back. PACSys provides a client-side implementation that mirrors the Java DPM scaling service.
 
 !!! warning "Low-level feature - most users don't need this"
     It is recommended to use the official scaling service or avoid .RAW entirely.
-    ACNET backends (DPM, gRPC, DMQ) return **already-scaled** engineering values. The `Scaler` class is only needed when working with performance-critical loops (e.g., fast setting of ramp tables).
+    ACNET backends (DPM/HTTP, DPM/gRPC, DMQ) return **already-scaled** engineering values. The `Scaler` class is only needed when working with performance-critical loops (e.g., fast setting of ramp tables).
 
 ## Overview
 
@@ -296,7 +296,7 @@ back = s.unscale(eng)   # array of raw integers
 
 ---
 
-## Scaling for different properties
+## Scaling for Different Properties
 
 Scaling also applies to parts of other properties.
 
@@ -344,4 +344,4 @@ Basic status originally defined 4 attributes (ON, READY, REMOTE, POSITIVE). A 5t
 
 - [Ramp Tables](ramps.md) - uses scaling transforms for corrector magnet waveforms
 - [DRF Format](../drf.md) - `.RAW` qualifier and property syntax
-- [Reading Devices](../guide/reading.md) --standard (server-scaled) reads
+- [Reading Devices](../guide/reading.md) -- standard (server-scaled) reads

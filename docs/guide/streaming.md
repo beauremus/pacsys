@@ -82,7 +82,28 @@ handle.stop()
 pacsys.shutdown()
 ```
 
-The callback runs on the receiver thread - keep it fast to avoid blocking other readings.
+The callback runs on a dedicated worker thread by default -- keep it fast to avoid delaying delivery of other readings.
+
+### Dispatch Mode
+
+By default, callbacks run on a dedicated worker thread (`DispatchMode.WORKER`), which protects the reactor from slow callbacks. For lower latency, use `DispatchMode.DIRECT` to run callbacks inline on the reactor thread (i.e. the event loop thread):
+
+```python
+from pacsys import DispatchMode
+
+with pacsys.dpm(dispatch_mode=DispatchMode.DIRECT) as backend:
+    handle = backend.subscribe(
+        ["M:OUTTMP@p,1000"],
+        callback=lambda r, h: print(r.value),
+    )
+    import time; time.sleep(10)
+    handle.stop()
+```
+
+!!! warning "DIRECT mode"
+    In DIRECT mode, slow callbacks block the reactor thread and delay all readings on that connection. Only use DIRECT when your callback is very fast.
+
+Dispatch mode is configured per-backend, not per-subscription. The global backend (used by `pacsys.subscribe()`) always uses `WORKER`.
 
 ---
 

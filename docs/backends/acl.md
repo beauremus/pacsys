@@ -24,7 +24,6 @@ sequenceDiagram
 
 - **No authentication**: Anyone can read
 - **Read-only**: No write or streaming support
-- **Simple**: Just HTTP requests. No writes. No streaming.
 - **Slower**: HTTP overhead vs binary protocol
 
 ## Usage
@@ -61,7 +60,7 @@ with pacsys.acl() as backend:
     )
 ```
 
-See the [ACL command reference](https://www-bd.fnal.gov/issues/wiki/ACLCommands) for stuff not possible through regular acnet.
+See the [ACL command reference](https://www-bd.fnal.gov/issues/wiki/ACLCommands) for operations not available through the standard ACNET backends.
 
 ## URL Encoding
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-pacsys provides multiple backends which talk to various 'central services'. The DPM backends connect to the DPM server, DMQ talks to DataBroker/Bunny OAC/DAE, etc.
+PACSys provides multiple backends that talk to various central services. The DPM backends connect to the DPM server, DMQ talks to DataBroker/Bunny OAC/DAE, etc.
 
 ```mermaid
 flowchart TB
@@ -39,14 +39,15 @@ flowchart TB
 | **Read** | ✓ | ✓ | ✓ | ✓ |
 | **Write** | ✓ | ✓ | ✓ | - |
 | **Stream** | ✓ | ✓ | ✓ | - |
-| **Auth** | Kerberos¹ | JWT | Kerberos² | None |
+| **Auth** | Kerberos² | JWT | Kerberos³ | None |
 | **Permissions** | Role/class | Role | Console class | N/A |
-| **Protocol** | Custom binary (PC) | gRPC/Protobuf | AMQP/SDD | HTTP/CGI |
+| **Protocol** | TCP/SDD¹ | gRPC/Protobuf | AMQP/SDD¹ | HTTP/CGI |
 | **Port** | 6802 | 50051 | 5672 | 443 |
 | **Factory** | `pacsys.dpm()` | `pacsys.grpc()` | `pacsys.dmq()` | `pacsys.acl()` |
 
-¹ DPM/HTTP: Kerberos required for writes only, reads work anonymously
-² DMQ: Kerberos required for ALL operations (reads, writes, streaming)
+¹ SDD = Self-Describing Data, the binary encoding used by protocol compiler in DMQ and DPM/HTTP
+² DPM/HTTP: Kerberos required for writes only, reads work anonymously
+³ DMQ: Kerberos required for ALL operations (reads, writes, streaming)
 
 ---
 
