@@ -46,6 +46,7 @@ Issues = "https://github.com/fast-iota/pacsys/issues"
 [project.optional-dependencies]
 dev = [
   "pytest",
+  "pytest-cov",
   "ruff",
   "ty",
   "pre-commit",
@@ -70,6 +71,15 @@ testpaths = ["tests"]
 norecursedirs = ["reference_code"]
 # Exclude tests/real by default - run explicitly with: pytest tests/real/ -v -o "addopts="
 addopts = "--ignore=tests/real"
+
+[tool.coverage.run]
+source = ["pacsys"]
+omit = ["pacsys/_proto/*", "pacsys/dpm_protocol.py", "pacsys/backends/dmq_protocol.py"]
+data_file = "/tmp/.coverage"
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
 
 [tool.ruff]
 line-length = 120

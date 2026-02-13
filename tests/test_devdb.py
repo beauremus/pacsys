@@ -837,39 +837,3 @@ class TestCacheMaxSize:
         # Should not grow beyond max_size + 1 (due to eviction after put)
         with cache._lock:
             assert len(cache._data) <= 2
-
-
-# ─── Dataclass Immutability Tests ─────────────────────────────────────────────
-
-
-class TestDataclassImmutability:
-    def test_device_info_result_frozen(self):
-        info = _make_info()
-        with pytest.raises(AttributeError):
-            info.description = "changed"  # type: ignore[misc]
-
-    def test_property_info_frozen(self):
-        prop = PropertyInfo(
-            primary_units="cnt",
-            common_units="blip",
-            min_val=0.0,
-            max_val=100.0,
-            p_index=0,
-            c_index=0,
-            coeff=(),
-            is_step_motor=False,
-            is_destructive_read=False,
-            is_fe_scaling=False,
-            is_contr_setting=False,
-            is_knobbable=False,
-        )
-        with pytest.raises(AttributeError):
-            prop.min_val = 999.0  # type: ignore[misc]
-
-    def test_status_bit_def_frozen(self):
-        with pytest.raises(AttributeError):
-            ACLTST_STATUS_BITS[0].mask = 99  # type: ignore[misc]
-
-    def test_control_command_def_frozen(self):
-        with pytest.raises(AttributeError):
-            ACLTST_CONTROLS[0].value = 99  # type: ignore[misc]

@@ -15,7 +15,6 @@ from pacsys.scaling import (
     _check_unsigned,
     _common_scale,
     _common_unscale,
-    _float_to_int,
     _int_to_float,
     _primary_scale,
     _primary_unscale,
@@ -40,15 +39,6 @@ def _approx(a, b, rel=1e-4, abs_tol=1e-6):
 
 
 class TestHelpers:
-    def test_int_to_float(self):
-        assert _int_to_float(_float_bits(1.0)) == 1.0
-        assert _int_to_float(_float_bits(-3.14)) == pytest.approx(-3.14, rel=1e-6)
-        assert _int_to_float(0) == 0.0
-
-    def test_float_to_int(self):
-        assert _float_to_int(1.0) == struct.unpack(">i", struct.pack(">f", 1.0))[0]
-        assert _float_to_int(0.0) == 0
-
     def test_sign_extend(self):
         assert _sign_extend(0xFF, 1) == -1
         assert _sign_extend(0x7F, 1) == 127

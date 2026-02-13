@@ -565,7 +565,7 @@ class AsyncAcnetConnectionBase:
         """Send a request and register a reply handler."""
         task_rad50 = _rad50_encode(task)
         mult_flag = 1 if multiple_reply else 0
-        tmo = timeout if timeout > 0 else 1000
+        tmo = timeout if timeout > 0 else DEFAULT_TIMEOUT
 
         content = (
             struct.pack(

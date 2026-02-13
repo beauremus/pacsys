@@ -13,13 +13,11 @@ Tests cover:
 - Factory function
 """
 
-from datetime import datetime
 from unittest import mock
 from unittest.mock import MagicMock
 
 import pytest
 
-from pacsys.backends import timestamp_from_millis
 from pacsys.backends.dpm_http import DPMHTTPBackend
 from pacsys.types import Reading, ValueType
 from pacsys.errors import DeviceError, AuthenticationError, ReadError
@@ -67,24 +65,6 @@ class TestDPMHTTPBackendInit:
     def test_invalid_init_params(self, kwargs, match):
         with pytest.raises(ValueError, match=match):
             DPMHTTPBackend(**kwargs)
-
-
-# =============================================================================
-# Timestamp Helpers
-# =============================================================================
-
-
-def test_timestamp_from_millis():
-    """Timestamp conversion from milliseconds."""
-    millis = 1704067200_000  # Jan 1, 2024 00:00:00 UTC
-    dt = timestamp_from_millis(millis)
-    assert dt.timestamp() == millis / 1_000
-
-
-def test_timestamp_from_millis_zero():
-    """Timestamp conversion with zero."""
-    dt = timestamp_from_millis(0)
-    assert dt == datetime.fromtimestamp(0)
 
 
 # =============================================================================

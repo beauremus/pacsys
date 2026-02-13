@@ -450,6 +450,7 @@ class _SelectSubscription:
     sub_id: str
     drfs: list[str]
     drf_to_idx: dict[str, int]  # device_name -> index for O(1) routing key lookup
+    drf_to_all_indices: dict[str, list[int]]  # drf -> all indices (handles duplicates)
     handle: "_DMQSubscriptionHandle"
     callback: Optional[ReadingCallback]
     exchange_name: str
@@ -2018,13 +2019,16 @@ class DMQBackend(Backend):
         if result is None:
             return
         reply, idx, ref_id = result
-        reading = _reply_to_reading(reply, sub.drfs[idx], ref_id)
+        drf = sub.drfs[idx]
         handle = sub.handle
 
-        if sub.callback is not None:
-            self._dispatcher.dispatch_reading(sub.callback, reading, handle)
-        else:
-            handle._dispatch(reading)
+        # Deliver to all indices sharing this DRF (handles duplicate subscriptions)
+        for i in sub.drf_to_all_indices.get(drf, (idx,)):
+            reading = _reply_to_reading(reply, sub.drfs[i], ref_id)
+            if sub.callback is not None:
+                self._dispatcher.dispatch_reading(sub.callback, reading, handle)
+            else:
+                handle._dispatch(reading)
 
     def _cancel_subscription_async(self, sub: _SelectSubscription) -> None:
         """Schedule subscription cancellation on the IO loop."""
@@ -2099,11 +2103,15 @@ class DMQBackend(Backend):
             on_error=on_error,
         )
 
-        # Create subscription state
+        # Create subscription state (with reverse index for duplicate DRFs)
+        drf_to_all: dict[str, list[int]] = defaultdict(list)
+        for i, d in enumerate(drfs):
+            drf_to_all[d].append(i)
         sub = _SelectSubscription(
             sub_id=sub_id,
             drfs=drfs,
             drf_to_idx={d: i for i, d in enumerate(drfs)},
+            drf_to_all_indices=dict(drf_to_all),
             handle=handle,
             callback=callback,
             exchange_name=exchange_name,
@@ -2201,7 +2209,8 @@ class DMQBackend(Backend):
 
         if self._io_thread is not None:
             self._io_thread.join(timeout=3.0)
-            self._io_thread = None
+            if not self._io_thread.is_alive():
+                self._io_thread = None
 
         self._select_connection = None
         logger.info("All streaming stopped")

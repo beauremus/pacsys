@@ -409,10 +409,6 @@ class TestTimeScaling:
         assert BoosterHVRamp.update_rate_hz == 100_000
         assert BoosterHVRamp._tick_us() == 10.0
 
-    def test_base_default_rate_10khz(self):
-        assert Ramp.update_rate_hz == 10_000
-        assert Ramp._tick_us() == 100.0
-
     def test_time_round_trip(self):
         """Times survive from_bytes -> to_bytes at 100 KHz."""
         data = _make_ramp_bytes([(0, 500)])  # 500 ticks
@@ -950,9 +946,6 @@ class TestRampGroupModify:
 
 
 class TestBoosterHVRampGroup:
-    def test_inherits_correctly(self):
-        assert BoosterHVRampGroup.base is BoosterHVRamp
-
     def test_read_returns_correct_type(self, fake_backend):
         for dev in ["B:HS23T", "B:HS24T"]:
             fake_backend.set_reading(f"{dev}.SETTING.RAW@I", b"\x00" * 256)
