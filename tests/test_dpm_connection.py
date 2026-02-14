@@ -536,7 +536,3 @@ class TestSendMessagesBatch:
         conn = DPMConnection()
         with pytest.raises(DPMConnectionError, match="Not connected"):
             conn.send_messages_batch([b"test"])
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

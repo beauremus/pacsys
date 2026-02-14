@@ -7,8 +7,6 @@ Requires:
 - gssapi library installed
 - Valid Kerberos ticket (run `kinit` first)
 - Ticket from FNAL.GOV realm
-
-Run with: pytest tests/real/test_kerberos_auth.py -v -s
 """
 
 import subprocess
@@ -101,30 +99,18 @@ class TestRealKerberosAuth:
 class TestKerberosWithoutTicket:
     """Tests for Kerberos behavior when no valid ticket exists."""
 
-    def test_no_ticket_raises_auth_error(self):
+    def test_no_ticket_raises_auth_error(self, tmp_path, monkeypatch):
         """Test that missing ticket raises AuthenticationError."""
-        if has_valid_ticket():
-            pytest.skip("Valid ticket exists - can't test missing ticket scenario")
+        # Point KRB5CCNAME at an empty file so gssapi finds no credentials,
+        # regardless of whether the real user has a valid ticket.
+        empty_ccache = tmp_path / "krb5cc_empty"
+        empty_ccache.touch()
+        monkeypatch.setenv("KRB5CCNAME", f"FILE:{empty_ccache}")
 
         from pacsys.auth import KerberosAuth
         from pacsys.errors import AuthenticationError
 
         with pytest.raises(AuthenticationError, match="No valid Kerberos credentials"):
-            KerberosAuth()
-
-
-@pytest.mark.kerberos
-class TestKerberosWithoutGssapi:
-    """Tests for Kerberos behavior when gssapi is not installed."""
-
-    def test_missing_gssapi_raises_import_error(self):
-        """Test that missing gssapi raises ImportError with helpful message."""
-        if has_gssapi():
-            pytest.skip("gssapi is installed - can't test missing gssapi scenario")
-
-        from pacsys.auth import KerberosAuth
-
-        with pytest.raises(ImportError, match="gssapi library required"):
             KerberosAuth()
 
 

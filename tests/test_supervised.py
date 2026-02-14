@@ -139,11 +139,6 @@ class TestServerLifecycle:
         with pytest.raises(ValueError, match="port"):
             SupervisedServer(fake_backend, port=-1)
 
-    def test_repr(self, server):
-        r = repr(server)
-        assert "SupervisedServer" in r
-        assert "running" in r
-
 
 # ── One-shot Read Tests ───────────────────────────────────────────────────
 

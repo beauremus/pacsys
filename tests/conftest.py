@@ -4,9 +4,12 @@ Shared pytest fixtures for pacsys unit tests.
 This module provides common fixtures used across multiple test files.
 """
 
-import pytest
-from unittest import mock
+import os
 from datetime import datetime
+from pathlib import Path
+from unittest import mock
+
+import pytest
 
 from pacsys.types import Reading, ValueType, DeviceMeta
 from tests.devices import (
@@ -14,6 +17,19 @@ from tests.devices import (
     MockGSSAPIModule,
     MockSocketWithReplies,
 )
+
+_REAL_DIR = (Path(__file__).parent / "real").resolve()
+
+
+def pytest_ignore_collect(collection_path, config):
+    """Skip tests/real/ unless PACSYS_TEST_REAL=1 is set."""
+    try:
+        Path(collection_path).resolve().relative_to(_REAL_DIR)
+    except ValueError:
+        return None
+    if not os.environ.get("PACSYS_TEST_REAL"):
+        return True
+    return None
 
 
 @pytest.fixture

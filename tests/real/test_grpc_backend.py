@@ -10,8 +10,6 @@ This file contains gRPC-specific tests:
 Requires:
 - gRPC server accessible at localhost:23456 (tunnel to dce08.fnal.gov:50051)
 - grpcio package installed
-
-Run with: pytest tests/real/test_grpc_backend.py -v -s
 """
 
 import time
@@ -47,14 +45,14 @@ class TestGRPCBackendMultipleReads:
     def test_multiple_sequential_reads(self, grpc_backend):
         """Multiple reads work correctly in sequence."""
         total_start = time.time()
-        for i in range(3):
+        for i in range(5):
             start = time.time()
-            value = grpc_backend.read("M:OUTTMP", timeout=TIMEOUT_READ)
+            value = grpc_backend.read("M:OUTTMP@I", timeout=TIMEOUT_READ)
             elapsed = time.time() - start
             assert_fast_response(elapsed, f"read #{i + 1}")
             assert isinstance(value, (int, float))
         total_elapsed = time.time() - total_start
-        print(f"\n  3 sequential reads completed in {total_elapsed * 1000:.0f}ms")
+        print(f"\n  5 sequential reads completed in {total_elapsed * 1000:.0f}ms")
 
     def test_concurrent_reads(self):
         """Concurrent reads work correctly."""
@@ -87,7 +85,3 @@ class TestGRPCBackendMultipleReads:
         print(
             f"\n  4 concurrent reads completed in {elapsed * 1000:.0f}ms (max individual: {max(timings) * 1000:.0f}ms)"
         )
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])

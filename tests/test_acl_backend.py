@@ -614,7 +614,3 @@ class TestTimeout:
                 assert mock_get.call_args.kwargs["timeout"] == 2.0
             finally:
                 backend.close()
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

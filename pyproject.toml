@@ -64,14 +64,13 @@ doc = [
 
 [tool.pytest.ini_options]
 markers = [
-    "integration: marks tests as integration tests requiring network access (deselect with '-m \"not integration\"')",
     "streaming: marks tests as streaming tests (may be slow or flaky)",
-    "real: marks tests that require real server connections (run explicitly with 'pytest tests/real/')",
+    "write: marks tests that write to real devices (enable with PACSYS_TEST_WRITE=1)",
+    "kerberos: marks tests that require valid Kerberos ticket",
+    "ssh: marks tests that require SSH access to jump/dest hosts",
 ]
 testpaths = ["tests"]
 norecursedirs = ["reference_code"]
-# Exclude tests/real by default - run explicitly with: pytest tests/real/ -v -o "addopts="
-addopts = "--ignore=tests/real"
 
 [tool.coverage.run]
 source = ["pacsys"]

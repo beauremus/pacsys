@@ -9,11 +9,10 @@ Covers:
 - Configuration and lifecycle
 - Backend factory functions
 - Thread safety
-
-Run with: pytest tests/real/test_simple_api.py -v -s
 """
 
 import pytest
+import time
 import threading
 
 import pacsys
@@ -33,6 +32,14 @@ from .devices import (
     TIMEOUT_STREAM_ITER,
     TIMEOUT_THREAD_JOIN,
 )
+
+
+@pytest.fixture(autouse=True)
+def pause():
+    """Space out load."""
+    time.sleep(0.05)
+    yield
+    time.sleep(0.05)
 
 
 # =============================================================================
@@ -389,7 +396,3 @@ class TestThreadSafety:
         assert len(errors) == 0, f"Errors: {errors}"
         assert len(results) == 5
         print(f"\n  Concurrent reads: {results}")
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])

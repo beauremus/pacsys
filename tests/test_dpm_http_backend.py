@@ -701,7 +701,3 @@ class TestPoolTimeoutDiscard:
         # Connection should be returned to available pool
         assert mock_conn in pool._available
         mock_conn.close.assert_not_called()
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

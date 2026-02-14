@@ -2,8 +2,6 @@
 Low-level tests for AcnetConnectionTCP (direct acnetd commands over TCP).
 
 Tests the TCP protocol path: AcnetConnectionTCP -> acnetd
-
-Run with: pytest tests/real/low_level/test_acnet_tcp.py -v -s
 """
 
 import os
@@ -191,7 +189,3 @@ class TestAcnetTCPPing:
         reply = _ping(acnet_tcp_connection, MUONFE_NODE, MUONFE_EXPECTED_ADDRESS)
         assert reply.status == 0, f"Ping MUONFE failed with status {reply.status}"
         assert reply.last
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])

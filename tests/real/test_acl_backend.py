@@ -6,9 +6,6 @@ network. These tests will auto-skip when the endpoint is unreachable.
 
 NOTE: acl.pl is blocked externally - proxy access will be needed for
 CI/remote testing.
-
-Run:
-    python -m pytest tests/real/test_acl_backend.py -v -s -o "addopts="
 """
 
 import pytest

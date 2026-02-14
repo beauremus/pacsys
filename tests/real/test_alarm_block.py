@@ -3,8 +3,6 @@ Integration tests for alarm block helper.
 
 Tests that AlarmBlock parsing matches the structured data returned
 by reading .ANALOG and .DIGITAL properties directly.
-
-Run with: pytest tests/real/test_alarm_block.py -v -s
 """
 
 import pytest
@@ -61,10 +59,10 @@ class TestAnalogAlarm:
     """Tests for reading and cross-checking analog alarm blocks."""
 
     @pytest.mark.parametrize("drf", ANALOG_TEST_DEVICES)
-    def test_read_and_cross_check(self, dpm_http_backend, drf):
+    def test_read_and_cross_check(self, dpm_http_backend_cls, drf):
         """Read analog alarm via helper and cross-check with structured read."""
         device = get_device_name(drf)
-        alarm = _read_analog_alarm(dpm_http_backend, device)
+        alarm = _read_analog_alarm(dpm_http_backend_cls, device)
 
         # Basic sanity
         assert isinstance(alarm, AnalogAlarm)
@@ -72,7 +70,7 @@ class TestAnalogAlarm:
         assert not alarm.is_digital, "Analog alarm should have AD bit = 0"
 
         # Cross-check with structured read
-        structured = dpm_http_backend.get(f"{device}.ANALOG", timeout=TIMEOUT_READ)
+        structured = dpm_http_backend_cls.get(f"{device}.ANALOG", timeout=TIMEOUT_READ)
         assert structured.ok, f"Structured read failed: {structured.message}"
         assert structured.value_type == ValueType.ANALOG_ALARM
 
@@ -96,10 +94,10 @@ class TestAnalogAlarm:
             print(f"  eng units: min={alarm.minimum}, max={alarm.maximum}")
 
     @pytest.mark.parametrize("drf", ANALOG_TEST_DEVICES)
-    def test_round_trip(self, dpm_http_backend, drf):
+    def test_round_trip(self, dpm_http_backend_cls, drf):
         """Read, serialize, re-parse - should be identical."""
         device = get_device_name(drf)
-        alarm = _read_analog_alarm(dpm_http_backend, device)
+        alarm = _read_analog_alarm(dpm_http_backend_cls, device)
 
         data = alarm.to_bytes()
         parsed = AnalogAlarm.from_bytes(data)
@@ -112,10 +110,10 @@ class TestAnalogAlarm:
         assert parsed.ftd.to_word() == alarm.ftd.to_word()
         assert parsed.fe_data == alarm.fe_data
 
-    def test_flag_interpretation(self, dpm_http_backend):
+    def test_flag_interpretation(self, dpm_http_backend_cls):
         """Test flag bit accessors are consistent with raw flags."""
         device = get_device_name(ANALOG_ALARM_DEVICE)
-        alarm = _read_analog_alarm(dpm_http_backend, device)
+        alarm = _read_analog_alarm(dpm_http_backend_cls, device)
 
         print(f"\nFlag breakdown for {device}:")
         print(f"  raw flags: 0x{alarm.flags:04X}")
@@ -137,10 +135,10 @@ class TestDigitalAlarm:
     """Tests for reading and cross-checking digital alarm blocks."""
 
     @pytest.mark.parametrize("drf", DIGITAL_TEST_DEVICES)
-    def test_read_and_cross_check(self, dpm_http_backend, drf):
+    def test_read_and_cross_check(self, dpm_http_backend_cls, drf):
         """Read digital alarm via helper and cross-check with structured read."""
         device = get_device_name(drf)
-        alarm = _read_digital_alarm(dpm_http_backend, device)
+        alarm = _read_digital_alarm(dpm_http_backend_cls, device)
 
         # Basic sanity
         assert isinstance(alarm, DigitalAlarm)
@@ -149,7 +147,7 @@ class TestDigitalAlarm:
             print(f"  WARNING: {device} digital alarm has AD bit = 0 (database issue?)")
 
         # Cross-check with structured read
-        structured = dpm_http_backend.get(f"{device}.DIGITAL", timeout=TIMEOUT_READ)
+        structured = dpm_http_backend_cls.get(f"{device}.DIGITAL", timeout=TIMEOUT_READ)
         assert structured.ok, f"Structured read failed: {structured.message}"
         assert structured.value_type == ValueType.DIGITAL_ALARM
 
@@ -169,10 +167,10 @@ class TestDigitalAlarm:
         assert alarm.mask == s["mask"], "mask mismatch"
 
     @pytest.mark.parametrize("drf", DIGITAL_TEST_DEVICES)
-    def test_round_trip(self, dpm_http_backend, drf):
+    def test_round_trip(self, dpm_http_backend_cls, drf):
         """Read, serialize, re-parse - should be identical."""
         device = get_device_name(drf)
-        alarm = _read_digital_alarm(dpm_http_backend, device)
+        alarm = _read_digital_alarm(dpm_http_backend_cls, device)
 
         data = alarm.to_bytes()
         parsed = DigitalAlarm.from_bytes(data)
@@ -183,10 +181,10 @@ class TestDigitalAlarm:
         assert parsed.tries_needed == alarm.tries_needed
         assert parsed.ftd.to_word() == alarm.ftd.to_word()
 
-    def test_flag_interpretation(self, dpm_http_backend):
+    def test_flag_interpretation(self, dpm_http_backend_cls):
         """Test flag bit accessors are consistent with raw flags."""
         device = get_device_name(DIGITAL_ALARM_DEVICE)
-        alarm = _read_digital_alarm(dpm_http_backend, device)
+        alarm = _read_digital_alarm(dpm_http_backend_cls, device)
 
         print(f"\nFlag breakdown for {device}:")
         print(f"  raw flags: 0x{alarm.flags:04X}")
@@ -198,11 +196,11 @@ class TestDigitalAlarm:
         assert alarm.is_bad == bool(alarm.flags & AlarmFlags.BAD)
         assert alarm.is_digital == bool(alarm.flags & AlarmFlags.DIGITAL)
 
-    def test_no_digital_alarm_raises_device_error(self, dpm_http_backend):
+    def test_no_digital_alarm_raises_device_error(self, dpm_http_backend_cls):
         """Verify DeviceError is raised for device without digital alarm."""
         device = get_device_name(NO_DIGITAL_ALARM_DEVICE)
         with pytest.raises(DeviceError) as exc_info:
-            DigitalAlarm.read(device, dpm_http_backend)
+            DigitalAlarm.read(device, dpm_http_backend_cls)
 
         # DBM_NOPROP: facility=16, error=-13
         assert exc_info.value.facility_code == 16
@@ -214,10 +212,10 @@ class TestDigitalAlarm:
 class TestFTD:
     """Tests for FTD field interpretation."""
 
-    def test_ftd_interpretation(self, dpm_http_backend):
+    def test_ftd_interpretation(self, dpm_http_backend_cls):
         """Read FTD from real device and verify interpretation."""
         device = get_device_name(ANALOG_ALARM_DEVICE)
-        alarm = _read_analog_alarm(dpm_http_backend, device)
+        alarm = _read_analog_alarm(dpm_http_backend_cls, device)
         ftd = alarm.ftd
         ftd_word = ftd.to_word()
 

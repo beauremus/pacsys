@@ -5,9 +5,6 @@ Requires:
 - Valid Kerberos ticket (kinit)
 - Env vars PACSYS_TEST_SSH_JUMP and PACSYS_TEST_SSH_DEST
   (set in tests/real/.env.ssh)
-
-Run:
-    source tests/real/.env.ssh && python -m pytest tests/real/test_ssh.py -v -s -o "addopts="
 """
 
 import os

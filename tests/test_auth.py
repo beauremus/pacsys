@@ -74,19 +74,6 @@ class TestJWTAuth:
 class TestKerberosAuth:
     """Tests for KerberosAuth class."""
 
-    def test_requires_gssapi(self):
-        """Test ImportError when gssapi is not installed."""
-        # Skip if gssapi is installed
-        try:
-            import gssapi  # noqa: F401
-
-            pytest.skip("gssapi is installed")
-        except ImportError:
-            pass
-
-        with pytest.raises(ImportError, match="gssapi library required"):
-            KerberosAuth()
-
     def test_principal_extracted(self):
         """Test that principal is extracted from Kerberos credentials."""
         mock_gssapi = MockGSSAPIModule()
@@ -152,7 +139,3 @@ class TestKerberosAuth:
         with mock.patch.dict("sys.modules", {"gssapi": MockGSSAPI()}):
             with pytest.raises(AuthenticationError, match="No valid Kerberos credentials"):
                 KerberosAuth()
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

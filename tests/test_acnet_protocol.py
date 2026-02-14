@@ -388,6 +388,7 @@ def conn():
     try:
         yield c
     finally:
+        c._async._connected = False  # skip disconnect handshake (0.5s timeout)
         c.close()
 
 

@@ -5,8 +5,6 @@ Tests the AsyncDevice-centric interface: read(), setting(), status(), descriptio
 get(), write(), control(), and fluent modifiers (with_backend, with_event, with_range).
 
 Mirrors test_device_api.py for async code.
-
-Run with: pytest tests/real/test_async_device_api.py -v -s -o "addopts="
 """
 
 import asyncio
@@ -48,73 +46,64 @@ async def _create_async_dpm_write_backend():
 
 
 @requires_dpm_http
+@pytest.mark.asyncio(loop_scope="class")
 class TestAsyncDeviceRead:
     """Read operations via AsyncDevice API."""
 
-    @pytest.mark.asyncio
-    async def test_read_scalar(self, async_dpm_http_backend):
-        dev = AsyncDevice(SCALAR_DEVICE, backend=async_dpm_http_backend)
+    async def test_read_scalar(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice(SCALAR_DEVICE, backend=async_dpm_http_backend_cls)
         value = await dev.read(timeout=TIMEOUT_READ)
         assert isinstance(value, (int, float))
 
-    @pytest.mark.asyncio
-    async def test_read_scalar_second_device(self, async_dpm_http_backend):
-        dev = AsyncDevice(SCALAR_DEVICE_2, backend=async_dpm_http_backend)
+    async def test_read_scalar_second_device(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice(SCALAR_DEVICE_2, backend=async_dpm_http_backend_cls)
         value = await dev.read(timeout=TIMEOUT_READ)
         assert isinstance(value, (int, float))
 
-    @pytest.mark.asyncio
-    async def test_read_array(self, async_dpm_http_backend):
-        dev = AsyncDevice(ARRAY_DEVICE, backend=async_dpm_http_backend)
+    async def test_read_array(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice(ARRAY_DEVICE, backend=async_dpm_http_backend_cls)
         value = await dev.read(timeout=TIMEOUT_READ)
         assert hasattr(value, "__len__")
         assert len(value) == 11
 
-    @pytest.mark.asyncio
-    async def test_read_single_element(self, async_dpm_http_backend):
-        dev = AsyncDevice(SCALAR_ELEMENT, backend=async_dpm_http_backend)
+    async def test_read_single_element(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice(SCALAR_ELEMENT, backend=async_dpm_http_backend_cls)
         value = await dev.read(timeout=TIMEOUT_READ)
         assert isinstance(value, (int, float))
 
-    @pytest.mark.asyncio
-    async def test_read_raw(self, async_dpm_http_backend):
-        dev = AsyncDevice(SCALAR_DEVICE, backend=async_dpm_http_backend)
+    async def test_read_raw(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice(SCALAR_DEVICE, backend=async_dpm_http_backend_cls)
         value = await dev.read(field="raw", timeout=TIMEOUT_READ)
         assert isinstance(value, bytes)
         assert len(value) > 0
 
-    @pytest.mark.asyncio
-    async def test_read_description(self, async_dpm_http_backend):
-        dev = AsyncDevice("M:OUTTMP", backend=async_dpm_http_backend)
+    async def test_read_description(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice("M:OUTTMP", backend=async_dpm_http_backend_cls)
         desc = await dev.description(timeout=TIMEOUT_READ)
         assert isinstance(desc, str)
         assert len(desc) > 0
 
-    @pytest.mark.asyncio
-    async def test_read_status(self, async_dpm_http_backend):
-        dev = AsyncDevice(STATUS_DEVICE, backend=async_dpm_http_backend)
+    async def test_read_status(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice(STATUS_DEVICE, backend=async_dpm_http_backend_cls)
         value = await dev.status(timeout=TIMEOUT_READ)
         assert isinstance(value, dict)
         assert "on" in value
 
-    @pytest.mark.asyncio
-    async def test_read_status_field(self, async_dpm_http_backend):
+    async def test_read_status_field(self, async_dpm_http_backend_cls):
         """status(field='on') returns a bool."""
-        dev = AsyncDevice(SCALAR_DEVICE_3, backend=async_dpm_http_backend)
+        dev = AsyncDevice(SCALAR_DEVICE_3, backend=async_dpm_http_backend_cls)
         on_val = await dev.status(field="on", timeout=TIMEOUT_READ)
         assert isinstance(on_val, bool)
 
-    @pytest.mark.asyncio
-    async def test_read_analog_alarm(self, async_dpm_http_backend):
-        dev = AsyncDevice("N:H801", backend=async_dpm_http_backend)
+    async def test_read_analog_alarm(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice("N:H801", backend=async_dpm_http_backend_cls)
         value = await dev.analog_alarm(timeout=TIMEOUT_READ)
         assert isinstance(value, dict)
         assert "minimum" in value
         assert "maximum" in value
 
-    @pytest.mark.asyncio
-    async def test_read_digital_alarm(self, async_dpm_http_backend):
-        dev = AsyncDevice("N:H801", backend=async_dpm_http_backend)
+    async def test_read_digital_alarm(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice("N:H801", backend=async_dpm_http_backend_cls)
         value = await dev.digital_alarm(timeout=TIMEOUT_READ)
         assert isinstance(value, dict)
 
@@ -125,18 +114,17 @@ class TestAsyncDeviceRead:
 
 
 @requires_dpm_http
+@pytest.mark.asyncio(loop_scope="class")
 class TestAsyncDeviceSetting:
     """Read SETTING property via AsyncDevice API."""
 
-    @pytest.mark.asyncio
-    async def test_read_setting(self, async_dpm_http_backend):
-        dev = AsyncDevice(SCALAR_DEVICE_3, backend=async_dpm_http_backend)
+    async def test_read_setting(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice(SCALAR_DEVICE_3, backend=async_dpm_http_backend_cls)
         value = await dev.setting(timeout=TIMEOUT_READ)
         assert isinstance(value, (int, float))
 
-    @pytest.mark.asyncio
-    async def test_read_setting_raw(self, async_dpm_http_backend):
-        dev = AsyncDevice(SCALAR_DEVICE_3, backend=async_dpm_http_backend)
+    async def test_read_setting_raw(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice(SCALAR_DEVICE_3, backend=async_dpm_http_backend_cls)
         value = await dev.setting(field="raw", timeout=TIMEOUT_READ)
         assert isinstance(value, bytes)
         assert len(value) > 0
@@ -148,12 +136,12 @@ class TestAsyncDeviceSetting:
 
 
 @requires_dpm_http
+@pytest.mark.asyncio(loop_scope="class")
 class TestAsyncDeviceDigitalStatus:
     """digital_status() fetches BIT_VALUE/BIT_NAMES/BIT_VALUES."""
 
-    @pytest.mark.asyncio
-    async def test_returns_digital_status(self, async_dpm_http_backend):
-        dev = AsyncDevice(SCALAR_DEVICE_3, backend=async_dpm_http_backend)
+    async def test_returns_digital_status(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice(SCALAR_DEVICE_3, backend=async_dpm_http_backend_cls)
         status = await dev.digital_status(timeout=TIMEOUT_READ)
         assert isinstance(status, DigitalStatus)
         assert status.device == "Z:ACLTST"
@@ -161,17 +149,15 @@ class TestAsyncDeviceDigitalStatus:
         assert len(status.bits) > 0
         assert all(isinstance(b, StatusBit) for b in status.bits)
 
-    @pytest.mark.asyncio
-    async def test_legacy_attributes(self, async_dpm_http_backend):
-        dev = AsyncDevice(SCALAR_DEVICE_3, backend=async_dpm_http_backend)
+    async def test_legacy_attributes(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice(SCALAR_DEVICE_3, backend=async_dpm_http_backend_cls)
         status = await dev.digital_status(timeout=TIMEOUT_READ)
         assert isinstance(status.on, bool)
         assert isinstance(status.ready, bool)
 
-    @pytest.mark.asyncio
-    async def test_bit_lookup(self, async_dpm_http_backend):
+    async def test_bit_lookup(self, async_dpm_http_backend_cls):
         """Bits can be looked up by name."""
-        dev = AsyncDevice(SCALAR_DEVICE_3, backend=async_dpm_http_backend)
+        dev = AsyncDevice(SCALAR_DEVICE_3, backend=async_dpm_http_backend_cls)
         status = await dev.digital_status(timeout=TIMEOUT_READ)
         bit = status["On"]
         assert bit is not None
@@ -185,21 +171,20 @@ class TestAsyncDeviceDigitalStatus:
 
 
 @requires_dpm_http
+@pytest.mark.asyncio(loop_scope="class")
 class TestAsyncDeviceGet:
     """get() returns full Reading."""
 
-    @pytest.mark.asyncio
-    async def test_get_returns_reading(self, async_dpm_http_backend):
-        dev = AsyncDevice(SCALAR_DEVICE, backend=async_dpm_http_backend)
+    async def test_get_returns_reading(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice(SCALAR_DEVICE, backend=async_dpm_http_backend_cls)
         reading = await dev.get(timeout=TIMEOUT_READ)
         assert isinstance(reading, Reading)
         assert reading.ok
         assert reading.value is not None
         assert reading.value_type == ValueType.SCALAR
 
-    @pytest.mark.asyncio
-    async def test_get_has_metadata(self, async_dpm_http_backend):
-        dev = AsyncDevice(SCALAR_DEVICE, backend=async_dpm_http_backend)
+    async def test_get_has_metadata(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice(SCALAR_DEVICE, backend=async_dpm_http_backend_cls)
         reading = await dev.get(timeout=TIMEOUT_READ)
         assert reading.ok
         assert reading.name is not None
@@ -212,31 +197,28 @@ class TestAsyncDeviceGet:
 
 
 @requires_dpm_http
+@pytest.mark.asyncio(loop_scope="class")
 class TestAsyncDeviceErrors:
     """Error handling via AsyncDevice API."""
 
-    @pytest.mark.asyncio
-    async def test_read_nonexistent_raises(self, async_dpm_http_backend):
-        dev = AsyncDevice(NONEXISTENT_DEVICE, backend=async_dpm_http_backend)
+    async def test_read_nonexistent_raises(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice(NONEXISTENT_DEVICE, backend=async_dpm_http_backend_cls)
         with pytest.raises(DeviceError):
             await dev.read(timeout=TIMEOUT_READ)
 
-    @pytest.mark.asyncio
-    async def test_get_nonexistent_returns_error(self, async_dpm_http_backend):
-        dev = AsyncDevice(NONEXISTENT_DEVICE, backend=async_dpm_http_backend)
+    async def test_get_nonexistent_returns_error(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice(NONEXISTENT_DEVICE, backend=async_dpm_http_backend_cls)
         reading = await dev.get(timeout=TIMEOUT_READ)
         assert not reading.ok
         assert reading.error_code != 0
 
-    @pytest.mark.asyncio
-    async def test_invalid_field_raises_valueerror(self, async_dpm_http_backend):
-        dev = AsyncDevice(SCALAR_DEVICE, backend=async_dpm_http_backend)
+    async def test_invalid_field_raises_valueerror(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice(SCALAR_DEVICE, backend=async_dpm_http_backend_cls)
         with pytest.raises(ValueError, match="not allowed"):
             await dev.read(field="on")
 
-    @pytest.mark.asyncio
-    async def test_status_invalid_field_raises(self, async_dpm_http_backend):
-        dev = AsyncDevice(SCALAR_DEVICE_3, backend=async_dpm_http_backend)
+    async def test_status_invalid_field_raises(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice(SCALAR_DEVICE_3, backend=async_dpm_http_backend_cls)
         with pytest.raises(ValueError, match="not allowed"):
             await dev.status(field="scaled")
 
@@ -247,28 +229,26 @@ class TestAsyncDeviceErrors:
 
 
 @requires_dpm_http
+@pytest.mark.asyncio(loop_scope="class")
 class TestAsyncDeviceFluent:
     """with_backend(), with_event(), with_range() return new AsyncDevice."""
 
-    @pytest.mark.asyncio
-    async def test_with_backend(self, async_dpm_http_backend):
+    async def test_with_backend(self, async_dpm_http_backend_cls):
         dev = AsyncDevice(SCALAR_DEVICE)
-        bound = dev.with_backend(async_dpm_http_backend)
+        bound = dev.with_backend(async_dpm_http_backend_cls)
         assert bound is not dev
         value = await bound.read(timeout=TIMEOUT_READ)
         assert isinstance(value, (int, float))
 
-    @pytest.mark.asyncio
-    async def test_with_event(self, async_dpm_http_backend):
-        dev = AsyncDevice(SCALAR_DEVICE, backend=async_dpm_http_backend)
+    async def test_with_event(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice(SCALAR_DEVICE, backend=async_dpm_http_backend_cls)
         immediate = dev.with_event("I")
         assert immediate.has_event
         value = await immediate.read(timeout=TIMEOUT_READ)
         assert isinstance(value, (int, float))
 
-    @pytest.mark.asyncio
-    async def test_with_range(self, async_dpm_http_backend):
-        dev = AsyncDevice("B:IRMS06", backend=async_dpm_http_backend)
+    async def test_with_range(self, async_dpm_http_backend_cls):
+        dev = AsyncDevice("B:IRMS06", backend=async_dpm_http_backend_cls)
         ranged = dev.with_range(0, 5)
         assert "[0:5]" in ranged.drf
         value = await ranged.read(timeout=TIMEOUT_READ)
@@ -284,12 +264,12 @@ class TestAsyncDeviceFluent:
 @requires_dpm_http
 @requires_kerberos
 @pytest.mark.kerberos
+@pytest.mark.asyncio
 class TestAsyncDeviceWrite:
     """AsyncDevice.write() operations."""
 
     @pytest.mark.write
     @requires_write_enabled
-    @pytest.mark.asyncio
     async def test_write_scalar(self):
         """Write a different value, verify readback, restore."""
         backend = await _create_async_dpm_write_backend()
@@ -313,7 +293,6 @@ class TestAsyncDeviceWrite:
 
     @pytest.mark.write
     @requires_write_enabled
-    @pytest.mark.asyncio
     async def test_write_with_verify(self):
         """AsyncDevice.write(verify=Verify(...)) reads back the value."""
         backend = await _create_async_dpm_write_backend()
@@ -335,7 +314,6 @@ class TestAsyncDeviceWrite:
 
     @pytest.mark.write
     @requires_write_enabled
-    @pytest.mark.asyncio
     async def test_write_verify_check_first(self):
         """Verify(check_first=True) skips write when value already matches."""
         backend = await _create_async_dpm_write_backend()
@@ -352,7 +330,6 @@ class TestAsyncDeviceWrite:
 
     @pytest.mark.write
     @requires_write_enabled
-    @pytest.mark.asyncio
     async def test_write_raw(self):
         """Write raw bytes via field='raw'."""
         backend = await _create_async_dpm_write_backend()
@@ -379,7 +356,6 @@ class TestAsyncDeviceWrite:
 
     @pytest.mark.write
     @requires_write_enabled
-    @pytest.mark.asyncio
     async def test_control_on_off(self):
         """dev.on() / dev.off() toggle the on status bit."""
         backend = await _create_async_dpm_write_backend()
@@ -405,7 +381,6 @@ class TestAsyncDeviceWrite:
 
     @pytest.mark.write
     @requires_write_enabled
-    @pytest.mark.asyncio
     async def test_positive_negative(self):
         """dev.positive() / dev.negative() toggle the positive status bit."""
         backend = await _create_async_dpm_write_backend()
@@ -433,7 +408,6 @@ class TestAsyncDeviceWrite:
 
     @pytest.mark.write
     @requires_write_enabled
-    @pytest.mark.asyncio
     async def test_ramp_dc(self):
         """dev.ramp() / dev.dc() toggle the ramp status bit."""
         backend = await _create_async_dpm_write_backend()
@@ -461,7 +435,6 @@ class TestAsyncDeviceWrite:
 
     @pytest.mark.write
     @requires_write_enabled
-    @pytest.mark.asyncio
     async def test_reset(self):
         """dev.reset() succeeds and status has on/ready."""
         backend = await _create_async_dpm_write_backend()
@@ -479,7 +452,6 @@ class TestAsyncDeviceWrite:
 
     @pytest.mark.write
     @requires_write_enabled
-    @pytest.mark.asyncio
     async def test_control_with_verify(self):
         """dev.on(verify=True) verifies STATUS.ON is True after write."""
         backend = await _create_async_dpm_write_backend()
@@ -507,12 +479,12 @@ class TestAsyncDeviceWrite:
 @requires_dpm_http
 @requires_kerberos
 @pytest.mark.kerberos
+@pytest.mark.asyncio
 class TestAsyncDeviceAlarmWrite:
     """Alarm write operations via AsyncDevice API."""
 
     @pytest.mark.write
     @requires_write_enabled
-    @pytest.mark.asyncio
     async def test_write_analog_alarm_max(self):
         """Write analog alarm MAX via backend, verify via device.analog_alarm()."""
         backend = await _create_async_dpm_write_backend()
@@ -534,7 +506,3 @@ class TestAsyncDeviceAlarmWrite:
             await backend.write(f"{ANALOG_ALARM_SETPOINT}.MAX", orig_max, timeout=TIMEOUT_READ)
         finally:
             await backend.close()
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])

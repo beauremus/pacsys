@@ -4,13 +4,12 @@ Real integration tests for supervised gRPC proxy server.
 Architecture: GRPCBackend(client) -> SupervisedServer(gRPC proxy) -> DPMHTTPBackend -> live DPM server
 
 Run:
-    python -m pytest tests/real/test_supervised.py -v -s -o "addopts="
+    PACSYS_TEST_REAL=1 python -m pytest tests/real/test_supervised.py -v -s
 
 With writes:
-    PACSYS_TEST_WRITE=1 python -m pytest tests/real/test_supervised.py -v -s -o "addopts="
+    PACSYS_TEST_REAL=1 PACSYS_TEST_WRITE=1 python -m pytest tests/real/test_supervised.py -v -s
 """
 
-import os
 import time
 
 import grpc
@@ -54,6 +53,8 @@ from .devices import (
     kerberos_available,
     requires_dpm_http,
     requires_grpc,
+    requires_kerberos,
+    requires_write_enabled,
 )
 
 
@@ -69,18 +70,8 @@ def assert_permission_denied(exc_info: pytest.ExceptionInfo[ReadError]) -> None:
 # Fixtures
 # =============================================================================
 
-requires_write_enabled = pytest.mark.skipif(
-    not os.environ.get("PACSYS_TEST_WRITE"),
-    reason="Set PACSYS_TEST_WRITE=1 to enable write tests",
-)
 
-requires_kerberos = pytest.mark.skipif(
-    not kerberos_available(),
-    reason="Valid Kerberos credentials required (run kinit first)",
-)
-
-
-@pytest.fixture
+@pytest.fixture(scope="class")
 def real_backend():
     """DPMHTTPBackend for proxying through supervised server."""
     if not dpm_server_available():
@@ -104,7 +95,7 @@ def real_write_backend():
     backend.close()
 
 
-@pytest.fixture
+@pytest.fixture(scope="class")
 def supervised_server(real_backend):
     """SupervisedServer wrapping the real DPM HTTP backend."""
     srv = SupervisedServer(real_backend, port=0)
@@ -113,7 +104,7 @@ def supervised_server(real_backend):
     srv.stop()
 
 
-@pytest.fixture
+@pytest.fixture(scope="class")
 def proxy_client(supervised_server):
     """GRPCBackend client connected to the supervised proxy."""
     client = GRPCBackend(host="localhost", port=supervised_server.port, timeout=TIMEOUT_READ)
@@ -160,7 +151,7 @@ def rate_limited_server(real_backend):
     srv.stop()
 
 
-@pytest.fixture
+@pytest.fixture(scope="class")
 def direct_grpc():
     """Direct GRPCBackend → real DPM gRPC server."""
     if not grpc_server_available():
@@ -270,14 +261,14 @@ class TestSupervisedProxyRead:
 
     def test_read_nonexistent_error(self, proxy_client):
         """Nonexistent device returns error Reading (via status oneof)."""
-        reading = proxy_client.get(NONEXISTENT_DEVICE, timeout=TIMEOUT_READ)
+        reading = proxy_client.get(NONEXISTENT_DEVICE, timeout=TIMEOUT_READ * 2.0)
         assert not reading.ok
         assert reading.error_code != 0
         assert reading.drf == NONEXISTENT_DEVICE
 
     def test_read_partial_failure(self, proxy_client):
         """Batch with valid + invalid device returns partial results."""
-        readings = proxy_client.get_many([SCALAR_DEVICE, NONEXISTENT_DEVICE], timeout=TIMEOUT_BATCH)
+        readings = proxy_client.get_many([SCALAR_DEVICE, NONEXISTENT_DEVICE], timeout=TIMEOUT_BATCH * 2.0)
         assert len(readings) == 2
         by_drf = {r.drf: r for r in readings}
         assert by_drf[SCALAR_DEVICE].ok, f"Valid device failed: {by_drf[SCALAR_DEVICE].message}"

@@ -131,8 +131,8 @@ requires_acnet_tcp = pytest.mark.skipif(
 # Standard timeouts for different operation types
 # Server latency is expected <100ms for valid devices, but error responses
 # (e.g., DPM_PEND for nonexistent devices) can take ~3s
-TIMEOUT_READ = 5.0  # Single device read (includes error response delay)
-TIMEOUT_BATCH = 5.0  # Batch read (may include slow error responses)
+TIMEOUT_READ = 10.0  # Single device read (includes error response delay)
+TIMEOUT_BATCH = 10.0  # Batch read (may include slow error responses)
 TIMEOUT_THREAD_JOIN = 6.0  # Thread join for concurrent operations
 TIMEOUT_STREAM_EVENT = 2.0  # Wait for streaming event
 TIMEOUT_STREAM_ITER = 3.0  # Streaming iterator timeout

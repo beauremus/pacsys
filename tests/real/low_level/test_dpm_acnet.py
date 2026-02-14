@@ -2,8 +2,6 @@
 Low-level tests for DPM/ACNET connection (DPM via ACNET protocol routing).
 
 Tests the ACNET protocol path: DPMAcnet -> acnetd -> DPM
-
-Run with: pytest tests/real/low_level/test_dpm_acnet.py -v -s
 """
 
 import pytest
@@ -54,7 +52,3 @@ class TestDPMAcnetConnection:
             finally:
                 dpm.close()
             time.sleep(0.5)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])

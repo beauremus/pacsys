@@ -3,9 +3,6 @@ Real server tests for DevDB gRPC client.
 
 Requires a DevDB service running at localhost:45678 (or PACSYS_DEVDB_HOST/PORT).
 Auto-skips if not available.
-
-Usage:
-    python -m pytest tests/real/test_devdb.py -v -s -o "addopts="
 """
 
 import os

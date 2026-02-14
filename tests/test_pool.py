@@ -615,7 +615,3 @@ class TestEdgeCases:
             # Pool should still be usable
             assert pool.in_use_count == 0
             assert pool.available_count == 0
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

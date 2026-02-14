@@ -2,8 +2,6 @@
 Integration tests for FTPMAN protocol (Fast Time Plot & Snapshot).
 
 Tests against live ACNET front-end nodes. Requires acnetd TCP connection.
-
-Run with: pytest tests/real/low_level/test_ftp.py -v -s -o "addopts="
 """
 
 import time
@@ -533,7 +531,3 @@ class TestSnapshotSequentialRetrieval:
                     f"{all_points[i - 1].timestamp_us} → {all_points[i].timestamp_us}"
                 )
             assert wraps <= 1, f"Expected at most 1 supercycle wrap, got {wraps}"
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])

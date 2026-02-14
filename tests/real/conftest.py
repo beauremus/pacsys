@@ -5,15 +5,16 @@ These tests require network access to actual servers:
 - DPM: acsys-proxy.fnal.gov:6802
 - gRPC: localhost:23456 (tunnel to dce08.fnal.gov:50051)
 
-Run these tests explicitly:
-    pytest tests/real/ -v -s
+Gated by environment variables:
+    PACSYS_TEST_REAL=1   - enable real tests (required)
+    PACSYS_TEST_WRITE=1  - enable write tests (optional, requires Kerberos)
 
-Or run specific test file:
-    pytest tests/real/test_dpm_http_backend.py -v -s
-    pytest tests/real/test_grpc_backend.py -v -s
+Run:
+    PACSYS_TEST_REAL=1 pytest tests/real/ -v -s
 """
 
 import functools
+import os
 
 import pytest
 import pytest_asyncio
@@ -61,61 +62,17 @@ __all__ = [
 ]
 
 
-# =============================================================================
-# Pytest Markers
-# =============================================================================
-
-
-def pytest_configure(config):
-    """Register custom markers."""
-    config.addinivalue_line(
-        "markers",
-        "real: marks tests that require real server connections",
-    )
-    config.addinivalue_line(
-        "markers",
-        "dpm: marks tests that require DPM server (acsys-proxy)",
-    )
-    config.addinivalue_line(
-        "markers",
-        "grpc: marks tests that require gRPC server",
-    )
-    config.addinivalue_line(
-        "markers",
-        "acl: marks tests that require ACL CGI endpoint",
-    )
-    config.addinivalue_line(
-        "markers",
-        "dmq: marks tests that require DMQ/RabbitMQ broker",
-    )
-    config.addinivalue_line(
-        "markers",
-        "acnet_tcp: marks tests that require acnetd via TCP",
-    )
-    config.addinivalue_line(
-        "markers",
-        "streaming: marks streaming tests (may be slow)",
-    )
-    config.addinivalue_line(
-        "markers",
-        "kerberos: marks tests that require valid Kerberos ticket",
-    )
-    config.addinivalue_line(
-        "markers",
-        "write: marks tests that write to real devices (enable with PACSYS_TEST_WRITE=1)",
-    )
-    config.addinivalue_line(
-        "markers",
-        "ssh: marks tests that require SSH access to jump/dest hosts",
-    )
-
-
 def pytest_collection_modifyitems(config, items):
-    """Add 'real' marker to all tests in this directory and apply skip conditions."""
+    """Skip all real tests unless PACSYS_TEST_REAL=1 is set.
+
+    This catches direct file invocations (e.g. pytest tests/real/some_file.py)
+    that bypass pytest_ignore_collect in the parent conftest.
+    """
+    if os.environ.get("PACSYS_TEST_REAL"):
+        return
+    skip = pytest.mark.skip(reason="Set PACSYS_TEST_REAL=1 to run real tests")
     for item in items:
-        # Add 'real' marker to all tests in tests/real/
-        if "tests/real" in str(item.fspath) or "tests\\real" in str(item.fspath):
-            item.add_marker(pytest.mark.real)
+        item.add_marker(skip)
 
 
 # =============================================================================
@@ -125,7 +82,17 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture
 def dpm_http_backend():
-    """Create a DPMHTTPBackend for testing."""
+    """Create a DPMHTTPBackend for testing (per-test)."""
+    from pacsys.backends.dpm_http import DPMHTTPBackend
+
+    backend = DPMHTTPBackend()
+    yield backend
+    backend.close()
+
+
+@pytest.fixture(scope="class")
+def dpm_http_backend_cls():
+    """Class-scoped DPMHTTPBackend shared across tests in a class."""
     from pacsys.backends.dpm_http import DPMHTTPBackend
 
     backend = DPMHTTPBackend()
@@ -175,6 +142,16 @@ async def async_dpm_http_backend():
     await backend.close()
 
 
+@pytest_asyncio.fixture(scope="class", loop_scope="class")
+async def async_dpm_http_backend_cls():
+    """Class-scoped AsyncDPMHTTPBackend shared across tests in a class."""
+    from pacsys.aio._dpm_http import AsyncDPMHTTPBackend
+
+    backend = AsyncDPMHTTPBackend()
+    yield backend
+    await backend.close()
+
+
 @pytest_asyncio.fixture
 async def async_grpc_backend():
     """Create an AsyncGRPCBackend for testing."""
@@ -204,6 +181,49 @@ async def async_read_backend(request):
         backend = AsyncGRPCBackend()
     else:
         raise ValueError(f"Unknown backend type: {backend_type}")
+
+    yield backend
+    await backend.close()
+
+
+@pytest_asyncio.fixture(params=["dpm_http", "grpc"], scope="class", loop_scope="class")
+async def async_read_backend_cls(request):
+    """Parametrized fixture that yields each async read-capable backend."""
+    backend_type = request.param
+
+    if backend_type == "dpm_http":
+        if not dpm_server_available():
+            pytest.skip("DPM server not available")
+        from pacsys.aio._dpm_http import AsyncDPMHTTPBackend
+
+        backend = AsyncDPMHTTPBackend()
+    elif backend_type == "grpc":
+        if not grpc_server_available():
+            pytest.skip("gRPC server not available")
+        from pacsys.aio._grpc import AsyncGRPCBackend
+
+        backend = AsyncGRPCBackend()
+    else:
+        raise ValueError(f"Unknown backend type: {backend_type}")
+
+    yield backend
+    await backend.close()
+
+
+@pytest_asyncio.fixture(params=["dpm_http"], scope="class", loop_scope="class")
+async def async_write_backend_cls(request):
+    """Class-scoped parametrized async write backend."""
+    if not kerberos_available():
+        pytest.skip("Kerberos credentials not available")
+    if request.param == "dpm_http":
+        if not dpm_server_available():
+            pytest.skip("DPM server not available")
+        from pacsys.auth import KerberosAuth
+        from pacsys.aio._dpm_http import AsyncDPMHTTPBackend
+
+        backend = AsyncDPMHTTPBackend(auth=KerberosAuth(), role="testing")
+    else:
+        raise ValueError(f"Unknown backend type: {request.param}")
 
     yield backend
     await backend.close()
@@ -269,6 +289,43 @@ def read_backend(request):
     backend.close()
 
 
+@pytest.fixture(params=["dmq", "dpm_http", "grpc", "acl"], scope="class")
+def read_backend_cls(request):
+    """Class-level version of read_backend fixture."""
+    backend_type = request.param
+
+    if backend_type == "dmq":
+        if not dmq_server_available():
+            pytest.skip("DMQ server not available")
+        from pacsys.auth import KerberosAuth
+        from pacsys.backends.dmq import DMQBackend
+
+        backend = DMQBackend(host="localhost", port=5672, auth=KerberosAuth())
+    elif backend_type == "dpm_http":
+        if not dpm_server_available():
+            pytest.skip("DPM server not available")
+        from pacsys.backends.dpm_http import DPMHTTPBackend
+
+        backend = DPMHTTPBackend()
+    elif backend_type == "grpc":
+        if not grpc_server_available():
+            pytest.skip("gRPC server not available")
+        from pacsys.backends.grpc_backend import GRPCBackend
+
+        backend = GRPCBackend()
+    elif backend_type == "acl":
+        if not acl_server_available():
+            pytest.skip("ACL server not available at localhost:10443")
+        from pacsys.backends.acl import ACLBackend
+
+        backend = ACLBackend(base_url=ACL_TEST_URL, verify_ssl=False)
+    else:
+        raise ValueError(f"Unknown backend type: {backend_type}")
+
+    yield backend
+    backend.close()
+
+
 @pytest.fixture(params=["dpm_http", "dmq"])
 def write_backend(request):
     """Parametrized fixture that yields each write-capable backend.
@@ -276,6 +333,35 @@ def write_backend(request):
     Tests using this fixture will run against DPM HTTP and DMQ backends.
     Skips if server not available or Kerberos credentials missing.
     """
+    backend_type = request.param
+
+    if not kerberos_available():
+        pytest.skip("Kerberos credentials not available")
+
+    if backend_type == "dpm_http":
+        if not dpm_server_available():
+            pytest.skip("DPM server not available")
+        from pacsys.auth import KerberosAuth
+        from pacsys.backends.dpm_http import DPMHTTPBackend
+
+        backend = DPMHTTPBackend(auth=KerberosAuth(), role="testing")
+    elif backend_type == "dmq":
+        if not dmq_server_available():
+            pytest.skip("DMQ server not available")
+        from pacsys.auth import KerberosAuth
+        from pacsys.backends.dmq import DMQBackend
+
+        backend = DMQBackend(host="localhost", auth=KerberosAuth())
+    else:
+        raise ValueError(f"Unknown backend type: {backend_type}")
+
+    yield backend
+    backend.close()
+
+
+@pytest.fixture(params=["dpm_http", "dmq"], scope="class")
+def write_backend_cls(request):
+    """Class-level version of write_backend fixture."""
     backend_type = request.param
 
     if not kerberos_available():
@@ -350,14 +436,36 @@ def reset_global_backend():
 
 @pytest.fixture(autouse=True)
 def reset_async_global_backend():
-    """Reset async global backend before and after each test."""
+    """Reset async global backend and config before and after each test."""
     import pacsys.aio as aio
 
-    aio._global_async_backend = None
-    aio._async_backend_initialized = False
+    _reset_aio_state(aio)
     yield
+    _reset_aio_state(aio)
+
+
+def _reset_aio_state(aio):
+    """Reset all async module-level state (backend + config)."""
+    if aio._global_async_backend is not None:
+        try:
+            import asyncio
+
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(aio._global_async_backend.close())
+            else:
+                loop.run_until_complete(aio._global_async_backend.close())
+        except Exception:
+            pass  # best-effort cleanup from sync context
     aio._global_async_backend = None
     aio._async_backend_initialized = False
+    aio._config_backend = None
+    aio._config_auth = None
+    aio._config_role = None
+    aio._config_host = None
+    aio._config_port = None
+    aio._config_pool_size = None
+    aio._config_timeout = None
 
 
 # =============================================================================

@@ -4,14 +4,11 @@ Integration tests for DPMHTTPBackend (DPM HTTP-specific behavior).
 Common read/error/value-type tests are in test_backend_shared.py.
 Common streaming tests are in test_backend_shared.py.
 Common write tests are in test_backend_shared.py.
-
 This file contains DPM HTTP-specific tests:
 - Connection pool behavior
 - Raw bytes write (DEC F_float)
 - Alarm writes
 - Digital status reflects control
-
-Run with: pytest tests/real/test_dpm_http_backend.py -v -s
 """
 
 import time
@@ -28,7 +25,7 @@ from pacsys.ramp import (
     RecyclerSCRamp,
     RecyclerSRamp,
 )
-from pacsys.types import BasicControl
+from pacsys.types import BackendCapability, BasicControl
 
 from .devices import (
     ANALOG_ALARM_SETPOINT,
@@ -103,6 +100,15 @@ class TestDPMHTTPBackendWrite:
     Common write tests (scalar, raw readback, control pair, reset) are in
     test_backend_shared.py. These tests cover DPM HTTP-only behavior.
     """
+
+    def test_write_capabilities(self):
+        """Backend reports WRITE and AUTH_KERBEROS capabilities."""
+        backend = _create_dpm_write_backend()
+        try:
+            assert BackendCapability.WRITE in backend.capabilities
+            assert BackendCapability.AUTH_KERBEROS in backend.capabilities
+        finally:
+            backend.close()
 
     @pytest.mark.write
     @requires_write_enabled
@@ -305,7 +311,3 @@ class TestRamp:
 
             assert ramp0.values.shape == (64,)
             assert ramp1.values.shape == (64,)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])

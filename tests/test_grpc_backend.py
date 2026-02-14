@@ -1239,7 +1239,3 @@ class TestDaqCoreStream:
 
         # sleeps: 1.0 (err1), 2.0 (err2 - NOT reset), 4.0 (err3 - keeps growing)
         assert sleeps == [1.0, 2.0, 4.0]
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

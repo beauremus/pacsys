@@ -7,7 +7,7 @@ Requires:
   (set in tests/real/.env.ssh)
 
 Run:
-    source tests/real/.env.ssh && python -m pytest tests/real/test_acl_session.py -v -s -o "addopts="
+    source tests/real/.env.ssh && PACSYS_TEST_REAL=1 python -m pytest tests/real/test_acl_session.py -v -s
 """
 
 import pytest

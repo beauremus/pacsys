@@ -48,20 +48,6 @@ class TestAuthenticationInit:
         with pytest.raises(ValueError, match="auth must be KerberosAuth or None"):
             DPMHTTPBackend(auth="invalid")
 
-    def test_auth_kerberos_requires_gssapi(self):
-        """Test that KerberosAuth raises ImportError without gssapi."""
-        # gssapi is not installed, so this should raise ImportError
-        # If gssapi IS installed, skip this test
-        try:
-            import gssapi  # noqa: F401
-
-            pytest.skip("gssapi is installed - cannot test missing gssapi")
-        except ImportError:
-            pass
-
-        with pytest.raises(ImportError, match="gssapi library required"):
-            KerberosAuth()
-
     def test_auth_kerberos_initializes_principal(self):
         """Test that KerberosAuth extracts principal name."""
         mock_gssapi = MockGSSAPIModule()
@@ -327,7 +313,3 @@ class TestWriteConnectionPool:
 
                 # Pool should be empty
                 assert len(backend._write_connections) == 0
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

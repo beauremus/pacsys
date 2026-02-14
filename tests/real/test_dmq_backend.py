@@ -4,14 +4,11 @@ Integration tests for DMQBackend (DMQ-specific behavior).
 Common read/error/value-type tests are in test_backend_shared.py.
 Common streaming tests are in test_backend_shared.py.
 Common write tests are in test_backend_shared.py.
-
 This file contains DMQ-specific tests:
 - Connection lifecycle with Kerberos
 - DMQ-specific streaming patterns (periodic, callback, multi-device)
 - DMQ-specific error handling (iterator with callback, empty subscribe)
 - Raw integer write (.SETTING.RAW)
-
-Run with: pytest tests/real/test_dmq_backend.py -v -s
 """
 
 import threading
@@ -52,7 +49,6 @@ def _create_dmq_backend(**kwargs) -> DMQBackend:
 
 
 @requires_dmq
-@pytest.mark.real
 class TestDMQBackendConnection:
     """Tests for DMQBackend connection and lifecycle.
 
@@ -94,7 +90,6 @@ class TestDMQBackendConnection:
 
 
 @requires_dmq
-@pytest.mark.real
 @pytest.mark.streaming
 class TestDMQBackendStreaming:
     """DMQ-specific streaming tests.
@@ -172,7 +167,6 @@ class TestDMQBackendStreaming:
 
 @requires_dmq
 @requires_kerberos
-@pytest.mark.real
 @pytest.mark.kerberos
 class TestDMQBackendWrite:
     """DMQ-specific write tests.
@@ -180,6 +174,15 @@ class TestDMQBackendWrite:
     Common write tests (scalar, raw readback, control pair, reset) are in
     test_backend_shared.py. This tests DMQ-specific raw integer write.
     """
+
+    def test_write_capabilities(self):
+        """Backend reports WRITE and AUTH_KERBEROS capabilities."""
+        backend = _create_dmq_backend()
+        try:
+            assert BackendCapability.WRITE in backend.capabilities
+            assert BackendCapability.AUTH_KERBEROS in backend.capabilities
+        finally:
+            backend.close()
 
     @pytest.mark.write
     @requires_write_enabled
@@ -207,7 +210,3 @@ class TestDMQBackendWrite:
             backend.write(SCALAR_SETPOINT_RAW, int(original_scaled), timeout=TIMEOUT_READ)
         finally:
             backend.close()
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])
