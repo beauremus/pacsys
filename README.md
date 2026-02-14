@@ -93,6 +93,35 @@ with pacsys.dpm(auth=KerberosAuth(), role="testing") as backend:
     backend.write("Z:ACLTST", 72.5)
 ```
 
+## Async API
+
+Native async support for asyncio applications. Same API surface, no background threads.
+
+```python
+import pacsys.aio as aio
+from pacsys import KerberosAuth
+
+# Module-level API (mirrors pacsys.read, pacsys.get, etc.)
+value = await aio.read("M:OUTTMP")
+reading = await aio.get("M:OUTTMP")
+
+# Explicit async backend
+async with aio.dpm(auth=KerberosAuth()) as backend:
+    await backend.write("Z:ACLTST", 72.5)
+
+# Async streaming
+async with await backend.subscribe(["M:OUTTMP@p,1000"]) as stream:
+    async for reading, handle in stream.readings(timeout=30):
+        print(f"{reading.name}: {reading.value}")
+
+# AsyncDevice
+from pacsys.aio import AsyncDevice
+
+dev = AsyncDevice("M:OUTTMP", backend=backend)
+temp = await dev.read()
+await dev.on()
+```
+
 ## SSH Utilities
 
 Port tunneling, SFTP, and interactive processes over multi-hop SSH.

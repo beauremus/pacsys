@@ -14,16 +14,9 @@ from typing import Optional, TYPE_CHECKING
 
 import numpy as np
 
-from pacsys.drf3 import DataRequest, parse_request, parse_event
-from pacsys.drf3.event import PeriodicEvent
-from pacsys.drf3.field import (
-    DRF_FIELD,
-    parse_field,
-    DEFAULT_FIELD_FOR_PROPERTY,
-    ALLOWED_FIELD_FOR_PROPERTY,
-)
+from pacsys._device_base import _DeviceBase, CONTROL_STATUS_MAP
+from pacsys.drf3 import parse_request
 from pacsys.drf3.property import DRF_PROPERTY
-from pacsys.drf3.range import ARRAY_RANGE
 from pacsys.types import Value, Reading, WriteResult, BasicControl
 
 if TYPE_CHECKING:
@@ -31,28 +24,14 @@ if TYPE_CHECKING:
     from pacsys.digital_status import DigitalStatus
     from pacsys.verify import Verify
 
-# Control command -> (status field, expected value when command succeeds)
-_CONTROL_STATUS_MAP: dict[BasicControl, tuple[str, bool]] = {
-    BasicControl.ON: ("on", True),
-    BasicControl.OFF: ("on", False),
-    BasicControl.RESET: ("ready", True),
-    BasicControl.TRIP: ("ready", False),
-    BasicControl.POSITIVE: ("positive", True),
-    BasicControl.NEGATIVE: ("positive", False),
-    BasicControl.RAMP: ("ramp", True),
-    BasicControl.DC: ("ramp", False),
-    BasicControl.REMOTE: ("remote", True),
-    BasicControl.LOCAL: ("remote", False),
-}
 
-
-class Device:
+class Device(_DeviceBase):
     """Device wrapper with DRF3 validation at construction.
 
     Devices are immutable - modification methods return NEW Device instances.
     """
 
-    __slots__ = ("_request", "_backend")
+    __slots__ = ("_backend",)
 
     def __init__(self, drf: str, backend: Optional[Backend] = None):
         """Create a device from DRF string.
@@ -64,91 +43,13 @@ class Device:
         Raises:
             ValueError: If DRF syntax is invalid (at construction, not read time)
         """
-        self._request = parse_request(drf)  # Validates DRF syntax
+        super().__init__(parse_request(drf))
         self._backend = backend
-
-    # ─── Properties ───────────────────────────────────────────────────────
-
-    @property
-    def drf(self) -> str:
-        """Canonical DRF string (normalized form)."""
-        return self._request.to_canonical()
-
-    @property
-    def name(self) -> str:
-        """Device name without property/range/event modifiers."""
-        return self._request.device
-
-    @property
-    def request(self) -> DataRequest:
-        """Parsed DRF3 request with all components."""
-        return self._request
-
-    @property
-    def has_event(self) -> bool:
-        """True if DRF specifies an explicit event (not default)."""
-        return self._request.event is not None and self._request.event.mode != "U"
-
-    @property
-    def is_periodic(self) -> bool:
-        """True if DRF specifies periodic acquisition."""
-        return isinstance(self._request.event, PeriodicEvent)
-
-    # ─── DRF Building Helpers ─────────────────────────────────────────────
-
-    def _build_drf(
-        self,
-        prop: DRF_PROPERTY,
-        field: DRF_FIELD | None,
-        event: str,
-    ) -> str:
-        """Build DRF from device name + explicit property/field/event.
-
-        Avoids to_canonical() field-fallthrough issues when switching properties.
-        """
-        out = self.name
-        out += f".{prop.name}"
-        if self._request.range is not None:
-            out += str(self._request.range)
-        if field is not None:
-            default = DEFAULT_FIELD_FOR_PROPERTY.get(prop)
-            if field != default:
-                out += f".{field.name}"
-        out += f"@{event}"
-        if self._request.extra is not None:
-            out += f"<-{self._request.extra.name}"
-        return out
-
-    def _resolve_field(self, field: str | None, prop: DRF_PROPERTY) -> DRF_FIELD | None:
-        """Resolve a user-supplied field string to a DRF_FIELD.
-
-        Args:
-            field: Field name (e.g., "raw", "on") or None for default.
-            prop: The property this field applies to.
-
-        Returns:
-            DRF_FIELD instance, or None if property has no default field and none given.
-
-        Raises:
-            ValueError: If field is not allowed for the property.
-        """
-        if field is None:
-            return DEFAULT_FIELD_FOR_PROPERTY.get(prop)
-        f = parse_field(field.upper())
-        allowed = ALLOWED_FIELD_FOR_PROPERTY.get(prop, [])
-        if f not in allowed:
-            raise ValueError(f"Field '{field}' not allowed for {prop.name}")
-        return f
 
     # ─── Read Methods ─────────────────────────────────────────────────────
 
     def read(self, *, field: str | None = None, timeout: float | None = None) -> Value:
-        """Read READING property. Raises DeviceError on failure.
-
-        Args:
-            field: Optional field override ('raw', 'primary', 'scaled').
-            timeout: Operation timeout in seconds.
-        """
+        """Read READING property. Raises DeviceError on failure."""
         drf = self._build_drf(
             DRF_PROPERTY.READING,
             self._resolve_field(field, DRF_PROPERTY.READING),
@@ -165,19 +66,8 @@ class Device:
         )
         return self._get_backend().read(drf, timeout)
 
-    _BOOL_STATUS_FIELDS = frozenset({"ON", "READY", "REMOTE", "POSITIVE", "RAMP"})
-
     def status(self, *, field: str | None = None, timeout: float | None = None) -> Value:
-        """Read STATUS property.
-
-        Args:
-            field: Optional field ('on', 'ready', 'remote', 'positive', 'ramp',
-                   'all', 'text', 'raw', etc.).
-
-        Returns:
-            For boolean fields (on/ready/remote/positive/ramp): bool.
-            For other fields or no field: raw backend value (dict, bytes, etc.).
-        """
+        """Read STATUS property."""
         resolved = self._resolve_field(field, DRF_PROPERTY.STATUS)
         drf = self._build_drf(DRF_PROPERTY.STATUS, resolved, "I")
         value = self._get_backend().read(drf, timeout)
@@ -222,15 +112,7 @@ class Device:
         field: str | None = None,
         timeout: float | None = None,
     ) -> Reading:
-        """Read device with full metadata (timestamp, cycle, meta).
-
-        Args:
-            prop: Property name ('reading', 'setting', 'status', 'analog',
-                  'digital', 'description'). If None, uses device's base DRF.
-            field: Optional field override (e.g., 'raw', 'on', 'scaled').
-                   Only valid when prop is specified.
-            timeout: Operation timeout in seconds.
-        """
+        """Read device with full metadata (timestamp, cycle, meta)."""
         if prop is None:
             if field is not None:
                 raise ValueError("field requires prop to be specified")
@@ -241,17 +123,7 @@ class Device:
         return self._get_backend().get(drf, timeout)
 
     def info(self, timeout: float | None = None):
-        """Fetch device metadata from DevDB (cached).
-
-        Provides scaling, limits, control commands, status bit definitions.
-
-        Args:
-            timeout: gRPC timeout in seconds (default: client's configured timeout).
-
-        Raises:
-            RuntimeError: If DevDB is not configured or unreachable.
-            DeviceError: If the device is not found in DevDB.
-        """
+        """Fetch device metadata from DevDB (cached)."""
         from pacsys.devdb import DeviceInfoResult  # noqa: F811
 
         devdb = self._get_devdb()
@@ -264,18 +136,7 @@ class Device:
         return results[self.name]
 
     def digital_status(self, timeout: float | None = None) -> DigitalStatus:
-        """Fetch full digital status (BIT_VALUE + BIT_NAMES + BIT_VALUES).
-
-        Returns a DigitalStatus with per-bit labels and values, richer than
-        the 5-bool legacy dict from get() on a STATUS property.
-
-        When DevDB is available and has cached status_bits for this device,
-        only 1 read (BIT_VALUE) is needed instead of 3. Falls back to the
-        3-read path if DevDB is unavailable.
-
-        Raises:
-            DeviceError: If the device has no status property.
-        """
+        """Fetch full digital status (BIT_VALUE + BIT_NAMES + BIT_VALUES)."""
         from pacsys.digital_status import DigitalStatus
         from pacsys.errors import DeviceError
 
@@ -289,7 +150,7 @@ class Device:
             try:
                 info = devdb.get_device_info([name])[name]
             except Exception:
-                info = None  # DevDB unavailable, fall through to 3-read path
+                info = None
             if info is not None and info.status_bits is not None:
                 reading = backend.get(f"{name}.STATUS.BIT_VALUE@I{extra}", timeout)
                 if reading.is_error:
@@ -329,8 +190,8 @@ class Device:
         return DigitalStatus.from_bit_arrays(
             device=name,
             raw_value=int(raw_value),
-            bit_names=bit_names,  # type: ignore[arg-type]  # list narrowing limitation
-            bit_values=bit_values,  # type: ignore[arg-type]  # list narrowing limitation
+            bit_names=bit_names,  # type: ignore[arg-type]
+            bit_values=bit_values,  # type: ignore[arg-type]
         )
 
     # ─── Write Methods ────────────────────────────────────────────────────
@@ -343,14 +204,7 @@ class Device:
         verify: bool | Verify | None = None,
         timeout: float | None = None,
     ) -> WriteResult:
-        """Write to SETTING property.
-
-        Args:
-            value: Value to write.
-            field: Optional field override ('raw', 'primary', 'scaled').
-            verify: Verification config (True/False/Verify/None).
-            timeout: Operation timeout in seconds.
-        """
+        """Write to SETTING property."""
         from pacsys.verify import resolve_verify, values_match
 
         v = resolve_verify(verify)
@@ -394,20 +248,14 @@ class Device:
         verify: bool | Verify | None = None,
         timeout: float | None = None,
     ) -> WriteResult:
-        """Write CONTROL command.
-
-        Args:
-            command: BasicControl enum value (ON, OFF, RESET, etc.).
-            verify: Verification reads STATUS to confirm command effect.
-            timeout: Operation timeout in seconds.
-        """
+        """Write CONTROL command."""
         from pacsys.verify import resolve_verify, values_match
 
         v = resolve_verify(verify)
         write_drf = self._build_drf(DRF_PROPERTY.CONTROL, None, "N")
         backend = self._get_backend()
 
-        mapping = _CONTROL_STATUS_MAP.get(command)
+        mapping = CONTROL_STATUS_MAP.get(command)
         status_field_name: str | None = mapping[0] if mapping else None
         expected: bool | None = mapping[1] if mapping else None
 
@@ -556,31 +404,8 @@ class Device:
         """Return new Device bound to a specific backend."""
         return self.__class__(self.drf, backend)
 
-    def with_event(self, event: str) -> Device:
-        """Return new Device with different event."""
-        new_event = parse_event(event)
-        new_drf = self._request.to_canonical(event=new_event)
-        return self.__class__(new_drf, self._backend)
-
-    def with_range(self, start: int | None = None, end: int | None = None, *, at: int | None = None) -> Device:
-        """Return new Device with array range.
-
-        Args:
-            start: Range start index (produces [start:end] or [start:]).
-            end: Range end index (inclusive). If None, range extends to end of array.
-            at: Single element index (produces [at]). Mutually exclusive with start/end.
-            No arguments produces full array range [:].
-        """
-        if at is not None:
-            if start is not None or end is not None:
-                raise ValueError("'at' cannot be combined with 'start'/'end'")
-            new_range = ARRAY_RANGE(mode="single", low=at)
-        elif start is not None:
-            new_range = ARRAY_RANGE(mode="std", low=start, high=end)
-        else:
-            new_range = ARRAY_RANGE(mode="full")
-        new_drf = self._request.to_canonical(range=new_range)
-        return self.__class__(new_drf, self._backend)
+    def _from_drf(self, drf: str) -> Device:
+        return self.__class__(drf, self._backend)
 
     # ─── Internal ─────────────────────────────────────────────────────────
 
@@ -597,17 +422,6 @@ class Device:
         from pacsys import _get_global_devdb
 
         return _get_global_devdb()
-
-    def __repr__(self) -> str:
-        return f"{self.__class__.__name__}({self.drf!r})"
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, Device):
-            return NotImplemented
-        return self.drf == other.drf
-
-    def __hash__(self) -> int:
-        return hash(self.drf)
 
 
 class ScalarDevice(Device):

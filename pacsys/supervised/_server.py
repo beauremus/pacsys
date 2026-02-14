@@ -304,20 +304,19 @@ class SupervisedServer:
         logger.debug("SupervisedServer background thread started")
 
     def stop(self) -> None:
-        """Stop the server gracefully."""
+        """Stop the server."""
         server = self._server
         loop = self._loop
         if server is not None and loop is not None:
-
-            async def _shutdown():
-                await server.stop(grace=2.0)
-
+            # Fire-and-forget: server.stop(0) causes wait_for_termination()
+            # to return, ending the server thread.  We cannot await the
+            # future because the loop closes before it can be resolved.
+            # grace=0 is intentional: grace>0 deadlocks (the loop closes
+            # before the grace period expires, orphaning the future).
             try:
-                fut = asyncio.run_coroutine_threadsafe(_shutdown(), loop)
-                fut.result(timeout=5.0)
-            except Exception as e:
-                logger.debug("Error during server shutdown: %s", e)
-
+                asyncio.run_coroutine_threadsafe(server.stop(grace=0), loop)
+            except RuntimeError:
+                pass  # loop already closed
             self._server = None
 
         if self._thread is not None:

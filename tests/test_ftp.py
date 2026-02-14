@@ -986,10 +986,10 @@ class TestSnapshotHandle:
         """DAE classes have retrieval_max=4096."""
         handle = self._make_handle(snap_class_code=22)  # DAE 1 Hz, max=4096
         try:
-            # Should NOT raise for 4096
+            # Should NOT raise ValueError for 4096
             # (will fail at the network level since conn is mocked, but no ValueError)
             with pytest.raises(Exception, match="(?!retrieval_max)"):
-                handle.retrieve(num_points=4096)
+                handle.retrieve(num_points=4096, timeout=0.1)
         finally:
             handle.cancel()
 

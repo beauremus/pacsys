@@ -169,6 +169,7 @@ ref_docs/
 # agentic stuff
 CLAUDE.md
 CLAUDE_HELPERS.md
+AGENT_HELPERS.md
 AGENTS.md
 GEMINI.md
 .claude
@@ -177,6 +178,7 @@ GEMINI.md
 SPECIFICATION_FULL.md
 SPECIFICATION.md
 .claude-header.md
+known_limitations.md
 
 #mkdocs
 site/

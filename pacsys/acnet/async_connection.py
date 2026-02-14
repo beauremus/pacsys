@@ -353,7 +353,7 @@ class AsyncAcnetConnectionBase:
         """Send DISCONNECT command."""
         content = struct.pack(">2H2I", ACNETD_COMMAND, CMD_DISCONNECT, self._raw_handle, 0)
         try:
-            await self._xact(content)
+            await self._xact(content, timeout=0.5)
         except Exception:
             pass
 
@@ -387,7 +387,7 @@ class AsyncAcnetConnectionBase:
     # Command transaction
     # ------------------------------------------------------------------
 
-    async def _xact(self, content: bytes) -> bytes:
+    async def _xact(self, content: bytes, timeout: float = 5.0) -> bytes:
         """Send a command and wait for ACK. Serialized via _cmd_lock.
 
         content is the raw protocol payload (msg_type + cmd_code + args)
@@ -417,7 +417,7 @@ class AsyncAcnetConnectionBase:
                 raise AcnetUnavailableError()
 
             try:
-                ack_data = await asyncio.wait_for(self._pending_ack, timeout=5.0)
+                ack_data = await asyncio.wait_for(self._pending_ack, timeout=timeout)
             except asyncio.TimeoutError:
                 self._pending_ack = None
                 # A late ACK could arrive and be consumed by the next

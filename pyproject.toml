@@ -46,6 +46,7 @@ Issues = "https://github.com/fast-iota/pacsys/issues"
 [project.optional-dependencies]
 dev = [
   "pytest",
+  "pytest-asyncio",
   "pytest-cov",
   "ruff",
   "ty",
