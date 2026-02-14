@@ -71,7 +71,7 @@ class TestBasicMonitoring:
         assert rc == 0
         output = buf.getvalue()
         assert "72.5" in output
-        assert "73.0" in output
+        assert "73 " in output
         assert "M:OUTTMP" in output
 
 

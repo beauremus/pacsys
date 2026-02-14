@@ -2,6 +2,7 @@
 
 import json
 import sys
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -17,13 +18,45 @@ from pacsys.device import Device
 from pacsys.drf_utils import get_device_name
 
 
-def _section(label: str, fn, *, verbose: bool = False, number_format: str | None = None) -> tuple[str | None, object]:
-    """Call fn(), return (error_msg, result). On exception, return (msg, None)."""
+@dataclass(frozen=True)
+class _DeviceProps:
+    """Which properties a device supports, from DevDB. All True = unknown/query everything."""
+
+    has_reading: bool = True
+    has_setting: bool = True
+    has_status: bool = True
+    has_analog_alarm: bool = True
+    has_digital_alarm: bool = True
+    device_index: int | None = None
+    ext_status_bits: tuple | None = None  # ExtStatusBitDef tuples for bit names
+
+
+def _is_noprop(msg: str | None) -> bool:
+    """True if the error indicates the property doesn't exist (expected, not a real failure)."""
+    return msg is not None and "DBM_NOPROP" in str(msg)
+
+
+def _noprop_str(err: Exception | str | None, result=None) -> str:
+    """Format a NOPROP error as 'DRF: message' without doubled suffixes."""
+    from pacsys.errors import DeviceError
+
+    if isinstance(err, DeviceError):
+        return f"{err.drf}: {err.message}"
+    if err is not None:
+        return str(err)
+    # Non-ok Reading with NOPROP message
+    if result is not None:
+        return f"{result.drf}: {result.message}"
+    return "DBM_NOPROP"
+
+
+def _section(label: str, fn) -> tuple[Exception | None, object]:
+    """Call fn(), return (exception, result). On exception, return (exc, None)."""
     try:
         result = fn()
         return None, result
     except Exception as e:
-        return str(e), None
+        return e, None
 
 
 def _format_reading_compact(reading, number_format: str | None = None) -> str:
@@ -90,46 +123,70 @@ def _format_digital_status_compact(ds) -> str:
 
 def _format_digital_status_verbose(ds) -> str:
     """Format digital status with per-bit detail."""
+    w = max((b.position for b in ds.bits), default=0)
+    w = len(str(w))  # digit width for alignment
     lines = []
     for b in ds.bits:
-        lines.append(f"    Bit {b.position}:  {'1' if b.is_set else '0'}  {b.name}: {b.value}")
+        lines.append(f"    Bit {b.position:>{w}}:  {'1' if b.is_set else '0'}  {b.name}: {b.value}")
     return "\n".join(lines)
 
 
+_DIGITAL_ALARM_BITMASK_KEYS = {"nominal", "mask"}
+
+
 def _format_digital_alarm_compact(alarm) -> str:
-    """Format digital alarm as nominal/mask."""
+    """Format digital alarm: bitmasks as binary, everything else as plain values."""
     if isinstance(alarm, dict):
         parts = []
         for k, v in alarm.items():
-            if isinstance(v, int):
+            if k in _DIGITAL_ALARM_BITMASK_KEYS and isinstance(v, int):
                 parts.append(f"{k}={v:08b}")
+            elif isinstance(v, bool):
+                parts.append(f"{k}={v}")
             else:
                 parts.append(f"{k}={v}")
-        return "  ".join(parts)
+        return ", ".join(parts)
     return str(alarm)
 
 
-def _format_digital_alarm_verbose(alarm) -> str:
-    """Format digital alarm with per-bit detail."""
+def _format_digital_alarm_verbose(alarm, ext_status_bits=None) -> tuple[str, str]:
+    """Format digital alarm verbose. Returns (summary, per-bit detail)."""
     if not isinstance(alarm, dict):
-        return str(alarm)
+        return str(alarm), ""
     nominal = alarm.get("nominal", 0)
     mask = alarm.get("mask", 0)
     if not isinstance(nominal, int) or not isinstance(mask, int):
-        return _format_digital_alarm_compact(alarm)
+        return _format_digital_alarm_compact(alarm), ""
+    # Summary from non-bitmask fields
+    summary_parts = []
+    for k, v in alarm.items():
+        if k not in _DIGITAL_ALARM_BITMASK_KEYS:
+            summary_parts.append(f"{k}={v}")
+    summary = ", ".join(summary_parts) if summary_parts else "nominal={nominal:08b}, mask={mask:08b}"
+    # Build bit_no -> name lookup from DevDB ext_status_bits
+    bit_names: dict[int, str] = {}
+    if ext_status_bits:
+        for ebd in ext_status_bits:
+            bit_names[ebd.bit_no] = ebd.description or ebd.name1 or f"bit{ebd.bit_no}"
     max_bits = max(nominal.bit_length(), mask.bit_length(), 1)
+    w = len(str(max_bits - 1))  # digit width for alignment
     lines = []
     for i in range(max_bits):
         n_bit = (nominal >> i) & 1
         m_bit = (mask >> i) & 1
         monitored = "monitored" if m_bit else "not monitored"
-        lines.append(f"    Bit {i}:  nominal={n_bit}  mask={m_bit}  ({monitored})")
-    return "\n".join(lines)
+        name = bit_names.get(i)
+        label = f"  {name}" if name else ""
+        lines.append(f"    Bit {i:>{w}}:{label}  nominal={n_bit}  mask={m_bit}  ({monitored})")
+    return summary, "\n".join(lines)
 
 
-def _display_text(dev, name: str, *, verbose: bool, number_format: str | None) -> tuple[list[str], bool]:
+def _display_text(
+    dev, name: str, *, verbose: bool, number_format: str | None, props: _DeviceProps
+) -> tuple[list[str], bool]:
     """Build text output lines for one device. Returns (lines, has_error)."""
-    lines = [name]
+    di = props.device_index
+    lines = [f"{name} (di={di})" if di is not None else name]
     has_error = False
 
     # Description
@@ -141,62 +198,93 @@ def _display_text(dev, name: str, *, verbose: bool, number_format: str | None) -
         lines.append(f"  Description:      {desc}")
 
     # Reading
-    err, reading = _section("Reading", lambda: dev.get(prop="reading"))
-    if err:
-        lines.append(f"  Reading:          [ERROR] {err}")
-        has_error = True
-    else:
-        lines.append(f"  Reading:          {_format_reading_compact(reading, number_format)}")
-        if not reading.ok:
+    if props.has_reading:
+        err, reading = _section("Reading", lambda: dev.get(prop="reading"))
+        # Backfill device_index from backend if DevDB wasn't available
+        if di is None and reading is not None and reading.ok and reading.meta:
+            meta_di = reading.meta.device_index
+            if meta_di:
+                lines[0] = f"{name} (di={meta_di})"
+        if _is_noprop(err) or (reading is not None and not reading.ok and _is_noprop(reading.message)):
+            if verbose:
+                lines.append(f"  Reading:          {_noprop_str(err, reading)}")
+        elif err:
+            lines.append(f"  Reading:          [ERROR] {err}")
             has_error = True
+        else:
+            lines.append(f"  Reading:          {_format_reading_compact(reading, number_format)}")
+            if not reading.ok:
+                has_error = True
 
     # Setting
-    err, setting = _section("Setting", lambda: dev.get(prop="setting"))
-    if err:
-        lines.append(f"  Setting:          [ERROR] {err}")
-        has_error = True
-    else:
-        lines.append(f"  Setting:          {_format_reading_compact(setting, number_format)}")
-        if not setting.ok:
+    if props.has_setting:
+        err, setting = _section("Setting", lambda: dev.get(prop="setting"))
+        if _is_noprop(err) or (setting is not None and not setting.ok and _is_noprop(setting.message)):
+            if verbose:
+                lines.append(f"  Setting:          {_noprop_str(err, setting)}")
+        elif err:
+            lines.append(f"  Setting:          [ERROR] {err}")
             has_error = True
+        else:
+            lines.append(f"  Setting:          {_format_reading_compact(setting, number_format)}")
+            if not setting.ok:
+                has_error = True
 
     # Analog alarm
-    err, alarm = _section("Analog alarm", lambda: dev.analog_alarm())
-    if err:
-        lines.append(f"  Analog alarm:     [ERROR] {err}")
-        has_error = True
-    else:
-        lines.append(f"  Analog alarm:     {_format_analog_alarm_compact(alarm, number_format)}")
+    if props.has_analog_alarm:
+        err, alarm = _section("Analog alarm", lambda: dev.analog_alarm())
+        if _is_noprop(err):
+            if verbose:
+                lines.append(f"  Analog alarm:     {_noprop_str(err)}")
+        elif err:
+            lines.append(f"  Analog alarm:     [ERROR] {err}")
+            has_error = True
+        else:
+            lines.append(f"  Analog alarm:     {_format_analog_alarm_compact(alarm, number_format)}")
 
     # Status
-    err, status = _section("Status", lambda: dev.status())
-    if err:
-        lines.append(f"  Status:           [ERROR] {err}")
-        has_error = True
-    else:
-        lines.append(f"  Status:           {_format_status_compact(status)}")
+    if props.has_status:
+        err, status = _section("Status", lambda: dev.status())
+        if _is_noprop(err):
+            if verbose:
+                lines.append(f"  Status:           {_noprop_str(err)}")
+        elif err:
+            lines.append(f"  Status:           [ERROR] {err}")
+            has_error = True
+        else:
+            lines.append(f"  Status:           {_format_status_compact(status)}")
 
     # Digital status
-    err, ds = _section("Digital status", lambda: dev.digital_status())
-    if err:
-        lines.append(f"  Digital status:   [ERROR] {err}")
-        has_error = True
-    elif verbose:
-        lines.append("  Digital status:")
-        lines.append(_format_digital_status_verbose(ds))
-    else:
-        lines.append(f"  Digital status:   {_format_digital_status_compact(ds)}")
+    if props.has_status:
+        err, ds = _section("Digital status", lambda: dev.digital_status())
+        if _is_noprop(err):
+            if verbose:
+                lines.append(f"  Digital status:   {_noprop_str(err)}")
+        elif err:
+            lines.append(f"  Digital status:   [ERROR] {err}")
+            has_error = True
+        elif verbose:
+            lines.append("  Digital status:")
+            lines.append(_format_digital_status_verbose(ds))
+        else:
+            lines.append(f"  Digital status:   {_format_digital_status_compact(ds)}")
 
     # Digital alarm
-    err, da = _section("Digital alarm", lambda: dev.digital_alarm())
-    if err:
-        lines.append(f"  Digital alarm:    [ERROR] {err}")
-        has_error = True
-    elif verbose:
-        lines.append("  Digital alarm:")
-        lines.append(_format_digital_alarm_verbose(da))
-    else:
-        lines.append(f"  Digital alarm:    {_format_digital_alarm_compact(da)}")
+    if props.has_digital_alarm:
+        err, da = _section("Digital alarm", lambda: dev.digital_alarm())
+        if _is_noprop(err):
+            if verbose:
+                lines.append(f"  Digital alarm:    {_noprop_str(err)}")
+        elif err:
+            lines.append(f"  Digital alarm:    [ERROR] {err}")
+            has_error = True
+        elif verbose:
+            summary, bits = _format_digital_alarm_verbose(da, props.ext_status_bits)
+            lines.append(f"  Digital alarm:    {summary}")
+            if bits:
+                lines.append(bits)
+        else:
+            lines.append(f"  Digital alarm:    {_format_digital_alarm_compact(da)}")
 
     return lines, has_error
 
@@ -224,55 +312,107 @@ def _digital_status_to_json(ds) -> list[dict]:
     return [{"bit": b.position, "value": b.is_set, "label": b.name, "text": b.value} for b in ds.bits]
 
 
-def _build_json(dev, name: str) -> tuple[dict, bool]:
+def _build_json(dev, name: str, *, props: _DeviceProps) -> tuple[dict, bool]:
     """Build JSON dict for one device. Returns (dict, has_error)."""
     d: dict = {"device": name}
+    if props.device_index is not None:
+        d["device_index"] = props.device_index
     has_error = False
 
     err, desc = _section("description", lambda: dev.description())
-    d["description"] = desc if not err else {"error": err}
+    d["description"] = desc if not err else {"error": str(err)}
     has_error = has_error or bool(err)
 
-    err, reading = _section("reading", lambda: dev.get(prop="reading"))
-    d["reading"] = _reading_to_json(reading) if not err else {"error": err}
-    has_error = has_error or bool(err) or (reading is not None and not reading.ok)
+    if props.has_reading:
+        err, reading = _section("reading", lambda: dev.get(prop="reading"))
+        # Backfill device_index from backend if DevDB wasn't available
+        if "device_index" not in d and reading is not None and reading.ok and reading.meta:
+            meta_di = reading.meta.device_index
+            if meta_di:
+                d["device_index"] = meta_di
+        noprop = _is_noprop(err) or (reading is not None and not reading.ok and _is_noprop(reading.message))
+        if not noprop:
+            d["reading"] = _reading_to_json(reading) if not err else {"error": str(err)}
+            has_error = has_error or bool(err) or (reading is not None and not reading.ok)
 
-    err, setting = _section("setting", lambda: dev.get(prop="setting"))
-    d["setting"] = _reading_to_json(setting) if not err else {"error": err}
-    has_error = has_error or bool(err) or (setting is not None and not setting.ok)
+    if props.has_setting:
+        err, setting = _section("setting", lambda: dev.get(prop="setting"))
+        noprop = _is_noprop(err) or (setting is not None and not setting.ok and _is_noprop(setting.message))
+        if not noprop:
+            d["setting"] = _reading_to_json(setting) if not err else {"error": str(err)}
+            has_error = has_error or bool(err) or (setting is not None and not setting.ok)
 
-    err, alarm = _section("analog_alarm", lambda: dev.analog_alarm())
-    d["analog_alarm"] = alarm if not err else {"error": err}
-    has_error = has_error or bool(err)
+    if props.has_analog_alarm:
+        err, alarm = _section("analog_alarm", lambda: dev.analog_alarm())
+        if not _is_noprop(err):
+            d["analog_alarm"] = alarm if not err else {"error": str(err)}
+            has_error = has_error or bool(err)
 
-    err, status = _section("status", lambda: dev.status())
-    d["status"] = status if not err else {"error": err}
-    has_error = has_error or bool(err)
+    if props.has_status:
+        err, status = _section("status", lambda: dev.status())
+        if not _is_noprop(err):
+            d["status"] = status if not err else {"error": str(err)}
+            has_error = has_error or bool(err)
 
-    err, ds = _section("digital_status", lambda: dev.digital_status())
-    d["digital_status"] = _digital_status_to_json(ds) if not err else {"error": err}
-    has_error = has_error or bool(err)
+    if props.has_status:
+        err, ds = _section("digital_status", lambda: dev.digital_status())
+        if not _is_noprop(err):
+            d["digital_status"] = _digital_status_to_json(ds) if not err else {"error": str(err)}
+            has_error = has_error or bool(err)
 
-    err, da = _section("digital_alarm", lambda: dev.digital_alarm())
-    d["digital_alarm"] = da if not err else {"error": err}
-    has_error = has_error or bool(err)
+    if props.has_digital_alarm:
+        err, da = _section("digital_alarm", lambda: dev.digital_alarm())
+        if not _is_noprop(err):
+            d["digital_alarm"] = da if not err else {"error": str(err)}
+            has_error = has_error or bool(err)
 
     return d, has_error
 
 
-def _check_devdb(args) -> None:
-    """Probe DevDB and print a warning if unreachable."""
+def _get_devdb():
+    """Get DevDB client, or None if unavailable."""
     import pacsys
 
     devdb = pacsys._get_global_devdb()
     if devdb is None:
         print("Warning: DevDB not configured (set PACSYS_DEVDB_HOST to enable)", file=sys.stderr)
-        return
-    host, port = devdb._host, devdb._port
+        return None
     try:
         devdb.get_device_info(["Z:NO_OP"], timeout=2.0)
+        return devdb
     except Exception:
-        print(f"Warning: DevDB unreachable at {host}:{port} — some metadata will be unavailable", file=sys.stderr)
+        print(
+            f"Warning: DevDB unreachable at {devdb._host}:{devdb._port} — some metadata will be unavailable",
+            file=sys.stderr,
+        )
+        return None
+
+
+def _query_device_props(devdb, name: str) -> _DeviceProps:
+    """Query DevDB to determine which properties a device supports.
+
+    DevDB reliably tells us about reading/setting/status. Alarm properties
+    (ANALOG/DIGITAL) are always attempted — NOPROP suppression handles the rest.
+    """
+    if devdb is None:
+        return _DeviceProps()  # all True = query everything
+
+    try:
+        info_map = devdb.get_device_info([name], timeout=2.0)
+        info = info_map.get(name)
+    except Exception:
+        return _DeviceProps()
+
+    if info is None:
+        return _DeviceProps()
+
+    return _DeviceProps(
+        has_reading=info.reading is not None,
+        has_setting=info.setting is not None,
+        has_status=info.status_bits is not None,
+        device_index=info.device_index,
+        ext_status_bits=info.ext_status_bits,
+    )
 
 
 def main() -> int:
@@ -288,8 +428,7 @@ def main() -> int:
         return EXIT_USAGE_ERROR
 
     try:
-        # Check DevDB availability and warn if unreachable
-        _check_devdb(args)
+        devdb = _get_devdb()
 
         is_json = args.output_format == "json"
         first = True
@@ -298,14 +437,17 @@ def main() -> int:
         for drf in args.devices:
             name = get_device_name(drf)
             dev = Device(name, backend=backend)
+            props = _query_device_props(devdb, name)
 
             if is_json:
-                data, err = _build_json(dev, name)
+                data, err = _build_json(dev, name, props=props)
                 print(json.dumps(data))
             else:
                 if not first:
                     print()  # blank line between devices
-                lines, err = _display_text(dev, name, verbose=args.verbose, number_format=args.number_format)
+                lines, err = _display_text(
+                    dev, name, verbose=args.verbose, number_format=args.number_format, props=props
+                )
                 print("\n".join(lines))
             if err:
                 has_error = True

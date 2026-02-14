@@ -237,18 +237,22 @@ class DigitalStatus:
         bits = []
         for i, bd in enumerate(bit_defs):
             is_active = ((raw_value & bd.mask) == bd.match) ^ bd.invert
+            bit_pos = (bd.mask & -bd.mask).bit_length() - 1 if bd.mask > 0 else i
             bits.append(
                 StatusBit(
-                    position=i,
+                    position=bit_pos,
                     name=bd.short_name,
                     value=bd.true_str if is_active else bd.false_str,
                     is_set=is_active,
                 )
             )
 
-        # Append extended status bits (higher bit positions from DevDB)
+        # Append extended status bits for positions not already covered
         if ext_bit_defs:
+            covered = {b.position for b in bits}
             for ebd in ext_bit_defs:
+                if ebd.bit_no in covered:
+                    continue
                 is_set = bool(raw_value & (1 << ebd.bit_no))
                 bits.append(
                     StatusBit(
@@ -259,6 +263,7 @@ class DigitalStatus:
                     )
                 )
 
+        bits.sort(key=lambda b: b.position)
         legacy = _infer_legacy_from_bits(bits)
         return cls(
             device=device,

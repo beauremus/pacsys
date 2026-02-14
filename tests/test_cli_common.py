@@ -158,6 +158,23 @@ class TestFormatValue:
 
         assert format_value(42, None) == "42"
 
+    def test_whole_float_displays_as_int(self):
+        from pacsys.cli._common import format_value
+
+        assert format_value(10.0, None) == "10"
+        assert format_value(72.0, None) == "72"
+        assert format_value(0.0, None) == "0"
+
+    def test_fractional_float_unchanged(self):
+        from pacsys.cli._common import format_value
+
+        assert format_value(72.5, None) == "72.5"
+
+    def test_whole_float_with_format_spec(self):
+        from pacsys.cli._common import format_value
+
+        assert format_value(10.0, ".2f") == "10.00"
+
     def test_hex_format(self):
         from pacsys.cli._common import format_value
 

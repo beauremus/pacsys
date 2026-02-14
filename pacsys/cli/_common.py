@@ -151,6 +151,8 @@ def format_value(value: Any, number_format: Optional[str]) -> str:
         return value
     if number_format:
         return format(value, number_format)
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
     return str(value)
 
 

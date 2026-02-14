@@ -81,7 +81,7 @@ ACLTST_STATUS_BITS = (
     ),
 )
 
-ACLTST_EXT_STATUS_BITS = (ExtStatusBitDef(bit_no=0, description="Power", name0="Off", name1="On", color0=2, color1=1),)
+ACLTST_EXT_STATUS_BITS = (ExtStatusBitDef(bit_no=7, description="Power", name0="Off", name1="On", color0=2, color1=1),)
 
 ACLTST_CONTROLS = (
     ControlCommandDef(value=0, short_name="Reset", long_name="Reset device"),
@@ -413,31 +413,42 @@ class TestDigitalStatusFromDevdbBits:
         assert status.positive is False
 
     def test_with_ext_bits(self):
-        """ext_bit_defs are included in status bits."""
+        """ext_bit_defs at non-overlapping positions are included."""
         status = DigitalStatus.from_devdb_bits(
             "Z:ACLTST",
             raw_value=0b0010,
             bit_defs=ACLTST_STATUS_BITS,
             ext_bit_defs=ACLTST_EXT_STATUS_BITS,
         )
-        assert len(status) == 5  # 4 standard + 1 extended
+        assert len(status) == 5  # 4 standard + 1 extended at bit 7
         ext_bit = status.bits[-1]
-        assert ext_bit.position == 0
+        assert ext_bit.position == 7
         assert ext_bit.name == "Power"
-        assert ext_bit.value == "Off"  # bit 0 is not set in 0b0010
+        assert ext_bit.value == "Off"  # bit 7 is not set in 0b0010
         assert ext_bit.is_set is False
 
     def test_with_ext_bits_active(self):
         """ext_bit_defs evaluate correctly when bit is set."""
         status = DigitalStatus.from_devdb_bits(
             "Z:ACLTST",
-            raw_value=0b0011,  # bit 0 set
+            raw_value=0b10000010,  # bit 7 set
             bit_defs=ACLTST_STATUS_BITS,
             ext_bit_defs=ACLTST_EXT_STATUS_BITS,
         )
         ext_bit = status.bits[-1]
-        assert ext_bit.value == "On"  # bit 0 is set
+        assert ext_bit.value == "On"  # bit 7 is set
         assert ext_bit.is_set is True
+
+    def test_ext_bits_overlapping_skipped(self):
+        """ext_bit_defs that overlap with standard bit positions are skipped."""
+        overlapping = (ExtStatusBitDef(bit_no=0, description="Dup", name0="No", name1="Yes", color0=0, color1=1),)
+        status = DigitalStatus.from_devdb_bits(
+            "Z:ACLTST",
+            raw_value=0b0010,
+            bit_defs=ACLTST_STATUS_BITS,
+            ext_bit_defs=overlapping,
+        )
+        assert len(status) == 4  # overlapping ext bit skipped
 
 
 # ─── DevDBClient Construction Tests ──────────────────────────────────────────
