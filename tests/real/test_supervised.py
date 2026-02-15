@@ -209,13 +209,13 @@ def _assert_values_equivalent(direct_val, proxied_val, tol):
     elif isinstance(direct_val, str) and isinstance(proxied_val, str):
         assert direct_val == proxied_val, f"string mismatch: direct={direct_val!r}, proxied={proxied_val!r}"
     elif isinstance(direct_val, bytes) and isinstance(proxied_val, bytes):
-        # Raw encoding may differ between gRPC (full protobuf) and HTTP paths -
-        # just verify both produced bytes
-        pass
+        # Both paths go through the same gRPC proto so raw bytes must match
+        assert len(direct_val) == len(proxied_val), (
+            f"raw bytes length mismatch: direct={len(direct_val)}, proxied={len(proxied_val)}"
+        )
     elif isinstance(direct_val, dict) and isinstance(proxied_val, dict):
-        # Dict structure may differ between backends (e.g., gRPC returns per-device
-        # digital status labels while HTTP returns canonical basic status fields).
-        # Just verify both produced non-empty dicts.
+        # Both paths return dicts but status dicts may differ structurally:
+        # gRPC server returns digital status bit labels, HTTP returns basic status booleans
         assert direct_val, "direct dict is empty"
         assert proxied_val, "proxied dict is empty"
     elif hasattr(direct_val, "__len__") and hasattr(proxied_val, "__len__"):
@@ -323,10 +323,17 @@ class TestSupervisedProxyStreaming:
 # delegates auth to the underlying backend. All write tests use raw stubs.
 
 
+def _ensure_oneshot(drf: str) -> str:
+    """Append @I if no event so supervised proxy treats as one-shot."""
+    if "@" not in drf:
+        return drf + "@I"
+    return drf
+
+
 def _stub_read_scalar(stub, drf, *, timeout=TIMEOUT_READ):
     """Read a scalar value via raw gRPC stub. Returns float."""
     req = DAQ_pb2.ReadingList()
-    req.drf.append(drf)
+    req.drf.append(_ensure_oneshot(drf))
     replies = list(stub.Read(req, timeout=timeout))
     assert len(replies) >= 1, f"No reply for {drf}"
     rd = replies[0].readings.reading[0]
@@ -336,7 +343,7 @@ def _stub_read_scalar(stub, drf, *, timeout=TIMEOUT_READ):
 def _stub_read_raw(stub, drf, *, timeout=TIMEOUT_READ):
     """Read raw bytes via raw gRPC stub. Returns bytes."""
     req = DAQ_pb2.ReadingList()
-    req.drf.append(drf)
+    req.drf.append(_ensure_oneshot(drf))
     replies = list(stub.Read(req, timeout=timeout))
     assert len(replies) >= 1, f"No reply for {drf}"
     rd = replies[0].readings.reading[0]
@@ -346,7 +353,7 @@ def _stub_read_raw(stub, drf, *, timeout=TIMEOUT_READ):
 def _stub_read_status(stub, drf, *, timeout=TIMEOUT_READ):
     """Read basic status via raw gRPC stub. Returns dict[str, str]."""
     req = DAQ_pb2.ReadingList()
-    req.drf.append(drf)
+    req.drf.append(_ensure_oneshot(drf))
     replies = list(stub.Read(req, timeout=timeout))
     assert len(replies) >= 1, f"No reply for {drf}"
     rd = replies[0].readings.reading[0]
@@ -399,18 +406,18 @@ class TestSupervisedProxyWrite:
         read_drf = strip_event(SCALAR_SETPOINT)
         original = _stub_read_scalar(stub, read_drf)
 
-        new_val = original + 0.1
-        status = _stub_write(stub, SCALAR_SETPOINT, new_val)
-        assert status == 0, f"Write failed: status_code={status}"
+        try:
+            new_val = original + 0.1
+            status = _stub_write(stub, SCALAR_SETPOINT, new_val)
+            assert status == 0, f"Write failed: status_code={status}"
 
-        time.sleep(1.0)
-        readback = _stub_read_scalar(stub, read_drf)
-        assert readback == pytest.approx(new_val, abs=0.01)
+            time.sleep(1.0)
+            readback = _stub_read_scalar(stub, read_drf)
+            assert readback == pytest.approx(new_val, abs=0.01)
+        finally:
+            _stub_write(stub, SCALAR_SETPOINT, original)
+            time.sleep(1.0)
 
-        # Restore
-        status = _stub_write(stub, SCALAR_SETPOINT, original)
-        assert status == 0
-        time.sleep(1.0)
         restored = _stub_read_scalar(stub, read_drf)
         assert restored == pytest.approx(original, abs=0.01)
 
@@ -422,17 +429,18 @@ class TestSupervisedProxyWrite:
         original_raw = _stub_read_raw(stub, SCALAR_SETPOINT_RAW)
         assert isinstance(original_raw, bytes) and len(original_raw) > 0
 
-        new_val = original_scaled + 1.0
-        status = _stub_write(stub, SCALAR_SETPOINT, new_val)
-        assert status == 0
+        try:
+            new_val = original_scaled + 1.0
+            status = _stub_write(stub, SCALAR_SETPOINT, new_val)
+            assert status == 0
 
-        time.sleep(1.0)
-        new_raw = _stub_read_raw(stub, SCALAR_SETPOINT_RAW)
-        assert new_raw != original_raw, "Raw bytes unchanged after write"
+            time.sleep(1.0)
+            new_raw = _stub_read_raw(stub, SCALAR_SETPOINT_RAW)
+            assert new_raw != original_raw, "Raw bytes unchanged after write"
+        finally:
+            _stub_write(stub, SCALAR_SETPOINT, original_scaled)
+            time.sleep(1.0)
 
-        # Restore
-        _stub_write(stub, SCALAR_SETPOINT, original_scaled)
-        time.sleep(1.0)
         restored_raw = _stub_read_raw(stub, SCALAR_SETPOINT_RAW)
         assert restored_raw == original_raw
 
@@ -447,23 +455,23 @@ class TestSupervisedProxyWrite:
         initial_status = _stub_read_status(stub, STATUS_CONTROL_DEVICE)
         initial = initial_status.get(field)
 
-        # Set TRUE
-        status = _stub_write(stub, STATUS_CONTROL_DEVICE, cmd_true)
-        assert status == 0, f"Control {cmd_true} failed"
-        time.sleep(1.0)
-        st = _stub_read_status(stub, STATUS_CONTROL_DEVICE)
-        assert st.get(field) == "True", f"Expected {field}=True after {cmd_true}, got {st.get(field)}"
+        try:
+            # Set TRUE
+            status = _stub_write(stub, STATUS_CONTROL_DEVICE, cmd_true)
+            assert status == 0, f"Control {cmd_true} failed"
+            time.sleep(1.0)
+            st = _stub_read_status(stub, STATUS_CONTROL_DEVICE)
+            assert st.get(field) == "True", f"Expected {field}=True after {cmd_true}, got {st.get(field)}"
 
-        # Set FALSE
-        status = _stub_write(stub, STATUS_CONTROL_DEVICE, cmd_false)
-        assert status == 0, f"Control {cmd_false} failed"
-        time.sleep(1.0)
-        st = _stub_read_status(stub, STATUS_CONTROL_DEVICE)
-        assert st.get(field) == "False", f"Expected {field}=False after {cmd_false}, got {st.get(field)}"
-
-        # Restore
-        restore = cmd_true if initial == "True" else cmd_false
-        _stub_write(stub, STATUS_CONTROL_DEVICE, restore)
+            # Set FALSE
+            status = _stub_write(stub, STATUS_CONTROL_DEVICE, cmd_false)
+            assert status == 0, f"Control {cmd_false} failed"
+            time.sleep(1.0)
+            st = _stub_read_status(stub, STATUS_CONTROL_DEVICE)
+            assert st.get(field) == "False", f"Expected {field}=False after {cmd_false}, got {st.get(field)}"
+        finally:
+            restore = cmd_true if initial == "True" else cmd_false
+            _stub_write(stub, STATUS_CONTROL_DEVICE, restore)
 
     def test_control_reset(self, write_proxy):
         """RESET command succeeds and status is readable afterwards."""

@@ -63,9 +63,12 @@ class TestConfigure:
         with pytest.raises(ValueError, match="Invalid backend"):
             aio.configure(backend="nosql")
 
-    def test_configure_after_init_raises(self, fake_backend):
-        with pytest.raises(RuntimeError, match="configure"):
-            aio.configure(host="other")
+    def test_configure_after_init_auto_replaces(self, fake_backend):
+        aio.configure(host="other")
+        assert fake_backend._closed is True
+        assert aio._global_async_backend is None
+        assert aio._async_backend_initialized is False
+        assert aio._config_host == "other"
 
 
 class TestShutdown:

@@ -107,6 +107,18 @@ with pacsys.dmq(auth=pacsys.KerberosAuth()) as backend:
     value = backend.read("M:OUTTMP")
 ```
 
+Use `configure()` to change the default backend and settings for all top-level calls:
+
+```python
+pacsys.configure(backend="grpc", default_timeout=10.0)
+
+# Now all top-level calls use gRPC
+value = pacsys.read("M:OUTTMP")
+```
+
+`configure()` can be called at any time — if a backend is already running, it will be
+automatically shut down and replaced on the next operation. See the full list of options in the [API Reference](api.md).
+
 :material-arrow-right: [Backends](backends/index.md) - architecture, configuration, comparison
 
 ---
@@ -121,8 +133,9 @@ value = pacsys.read("M:OUTTMP")
 # That's it - connections close automatically at exit
 ```
 
-Use `shutdown()` only if you need to reset state mid-process (e.g., before
-re-configuring with `configure()`).
+Use `shutdown()` only if you need to explicitly close connections mid-process
+(e.g., before exiting a long-running script). `configure()` handles shutdown
+automatically when reconfiguring.
 
 ---
 

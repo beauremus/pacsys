@@ -32,6 +32,7 @@ from .devices import (
     SLOW_PERIODIC,
     SCALAR_DEVICE,
     SCALAR_DEVICE_2,
+    SCALAR_DEVICE_3,
     SCALAR_SETPOINT,
     SCALAR_SETPOINT_RAW,
     SETTING_ON_READONLY,
@@ -286,8 +287,8 @@ class TestBackendMixedEvents:
     def test_get_many_mixed_periodic_and_clock_event(self, read_backend_cls: Backend):
         """get_many() returns first reading per device for mixed event types.
 
-        Tests that when combining a fast periodic (@p,100) with a slow clock
-        event (@e,02 = TCLK event 02, fires every ~4-5s), we:
+        Tests that when combining a periodic (@p,100) with a slow clock
+        event (@e,0C = TCLK event 0C, 15Hz booster), we:
         1. Get the first reading for each device
         2. Don't wait for additional periodic updates while waiting for clock event
         3. Return as soon as all devices have one reading
@@ -296,7 +297,7 @@ class TestBackendMixedEvents:
         """
         _skip_if_no_stream(read_backend_cls)
 
-        devices = [f"{SCALAR_DEVICE}@p,100", f"{SCALAR_DEVICE_2}@e,02"]
+        devices = [f"{SCALAR_DEVICE}@p,100", f"{SCALAR_DEVICE_2}@e,0C"]
 
         readings = read_backend_cls.get_many(devices, timeout=10.0)
 
@@ -332,7 +333,7 @@ class TestBackendMixedEvents:
         """Same device at periodic and clock event returns two distinct readings."""
         _skip_if_no_stream(read_backend_cls)
 
-        devices = [f"{SCALAR_DEVICE}@p,500", f"{SCALAR_DEVICE}@e,02"]
+        devices = [f"{SCALAR_DEVICE}@p,500", f"{SCALAR_DEVICE}@e,0C"]
         readings = read_backend_cls.get_many(devices, timeout=10.0)
 
         assert len(readings) == 2
@@ -343,18 +344,18 @@ class TestBackendMixedEvents:
         assert "@e" in readings[1].drf.lower(), f"Expected clock event in drf: {readings[1].drf}"
 
     def test_get_many_same_device_two_clock_events(self, read_backend_cls: Backend):
-        """Same device at two different clock events (02 and 1D)."""
+        """Same device at two different clock events (0F and 0C)."""
         _skip_if_no_stream(read_backend_cls)
 
-        devices = [f"{SCALAR_DEVICE}@e,02", f"{SCALAR_DEVICE}@e,1D"]
+        devices = [f"{SCALAR_DEVICE_3}@e,0F", f"{SCALAR_DEVICE_3}@e,0C"]
         readings = read_backend_cls.get_many(devices, timeout=10.0)
 
         assert len(readings) == 2
-        assert readings[0].ok, f"Event 02 failed: {readings[0].message}"
-        assert readings[1].ok, f"Event 1D failed: {readings[1].message}"
+        assert readings[0].ok, f"Event 0F failed: {readings[0].message}"
+        assert readings[1].ok, f"Event 0C failed: {readings[1].message}"
         # Verify each reading carries its specific clock event
-        assert "02" in readings[0].drf, f"Expected event 02 in drf: {readings[0].drf}"
-        assert "1D" in readings[1].drf, f"Expected event 1D in drf: {readings[1].drf}"
+        assert "0F" in readings[0].drf, f"Expected event 0F in drf: {readings[0].drf}"
+        assert "0C" in readings[1].drf, f"Expected event 0C in drf: {readings[1].drf}"
 
 
 # =============================================================================

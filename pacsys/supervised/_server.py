@@ -24,8 +24,30 @@ from ._policies import Policy, PolicyDecision, RequestContext, evaluate_policies
 
 logger = logging.getLogger("pacsys.supervised")
 
-# Bounded queue prevents OOM if client is slower than backend (#1)
-_STREAM_QUEUE_MAXSIZE = 10_000
+# Bounded queue prevents OOM if client is slower than backend
+_STREAM_QUEUE_MAXSIZE = 100_000
+
+
+def _reorder_map(original: list[str], modified: list[str]) -> list[int] | None:
+    """Map original positions to modified positions for index-correct responses.
+
+    Returns None if lists are identical (common fast path).
+    Returns map where map[orig_i] = mod_i, so results[map[i]] is the result
+    for original position i.
+    """
+    if original == modified:
+        return None
+    used: set[int] = set()
+    result = []
+    for orig_drf in original:
+        for mod_i, mod_drf in enumerate(modified):
+            if mod_i not in used and mod_drf == orig_drf:
+                result.append(mod_i)
+                used.add(mod_i)
+                break
+        else:
+            raise ValueError(f"Policy removed DRF {orig_drf!r} — filtering is not supported")
+    return result
 
 
 class _DAQServicer(DAQ_pb2_grpc.DAQServicer):
@@ -137,7 +159,9 @@ class _DAQServicer(DAQ_pb2_grpc.DAQServicer):
                     readings = await self._backend.get_many(final_drfs)
                 else:
                     readings = await asyncio.to_thread(self._backend.get_many, final_drfs)
-                for i, reading in enumerate(readings):
+                rmap = _reorder_map(drfs, final_drfs)
+                for i in range(len(drfs)):
+                    reading = readings[rmap[i]] if rmap else readings[i]
                     reply_proto = reading_to_proto_reply(reading, i)
                     self._audit_response(seq, peer, "Read", reply_proto)
                     yield reply_proto
@@ -146,8 +170,9 @@ class _DAQServicer(DAQ_pb2_grpc.DAQServicer):
             else:
                 item_count = 0
                 # Multimap: same DRF at multiple positions → fan out readings
+                # Use original request positions so clients see correct indices
                 drf_indices: dict[str, list[int]] = {}
-                for i, drf in enumerate(final_drfs):
+                for i, drf in enumerate(drfs):
                     drf_indices.setdefault(drf, []).append(i)
 
                 if isinstance(self._backend, AsyncBackend):
@@ -164,8 +189,7 @@ class _DAQServicer(DAQ_pb2_grpc.DAQServicer):
                                         raise ValueError(f"Backend returned unexpected DRF {reading.drf!r}")
                                     for idx in indices:
                                         reply_proto = reading_to_proto_reply(reading, idx)
-                                        if seq is not None and self._audit is not None:
-                                            self._audit.log_response(seq, peer, "Read", reply_proto)
+                                        self._audit_response(seq, peer, "Read", reply_proto)
                                         yield reply_proto
                                         item_count += 1
                                 else:
@@ -183,7 +207,7 @@ class _DAQServicer(DAQ_pb2_grpc.DAQServicer):
                         try:
                             queue.put_nowait(reading)
                         except asyncio.QueueFull:
-                            pass  # backpressure: drop newest under overload (#1)
+                            logger.warning("stream peer=%s queue full, dropping reading for %s", peer, reading.drf)
 
                     def on_reading(reading, handle):
                         try:
@@ -204,8 +228,7 @@ class _DAQServicer(DAQ_pb2_grpc.DAQServicer):
                                 raise ValueError(f"Backend returned unexpected DRF {reading.drf!r}")
                             for idx in indices:
                                 reply_proto = reading_to_proto_reply(reading, idx)
-                                if seq is not None and self._audit is not None:
-                                    self._audit.log_response(seq, peer, "Read", reply_proto)
+                                self._audit_response(seq, peer, "Read", reply_proto)
                                 yield reply_proto
                                 item_count += 1
                     finally:
@@ -244,10 +267,15 @@ class _DAQServicer(DAQ_pb2_grpc.DAQServicer):
         if len(drfs) > 5:
             devices += f" (+{len(drfs) - 5} more)"
 
-        values = []
-        for s in settings_proto:
-            value, _ = _proto_value_to_python(s.value)
-            values.append((s.device, value))
+        try:
+            values = []
+            for s in settings_proto:
+                value, _ = _proto_value_to_python(s.value)
+                values.append((s.device, value))
+        except ValueError as e:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(str(e))
+            return DAQ_pb2.SettingReply()  # type: ignore[unresolved-attribute]
 
         try:
             req_ctx, decision = self._check_policies(drfs, "Set", context, values=values, raw_request=request)
@@ -270,14 +298,21 @@ class _DAQServicer(DAQ_pb2_grpc.DAQServicer):
 
         try:
             assert decision.ctx is not None
+            if len(decision.ctx.drfs) != len(decision.ctx.values):
+                raise ValueError(
+                    f"Policy produced mismatched drfs/values: "
+                    f"{len(decision.ctx.drfs)} drfs vs {len(decision.ctx.values)} values"
+                )
             backend_settings = [(drf, val) for drf, (_, val) in zip(decision.ctx.drfs, decision.ctx.values)]
 
             if isinstance(self._backend, AsyncBackend):
                 results = await self._backend.write_many(backend_settings)
             else:
                 results = await asyncio.to_thread(self._backend.write_many, backend_settings)
+            rmap = _reorder_map(drfs, decision.ctx.drfs)
             reply = DAQ_pb2.SettingReply()  # type: ignore[unresolved-attribute]
-            for result in results:
+            for i in range(len(drfs)):
+                result = results[rmap[i]] if rmap else results[i]
                 reply.status.append(write_result_to_proto_status(result))
             elapsed = (time.monotonic() - start) * 1000
             logger.info("rpc=Set peer=%s elapsed_ms=%.1f items=%d", peer, elapsed, len(results))

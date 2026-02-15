@@ -219,8 +219,8 @@ Object-oriented interface for device access.
         - info
         - write
         - control
-        - on
-        - off
+        - "on"
+        - "off"
         - reset
         - set_analog_alarm
         - set_digital_alarm

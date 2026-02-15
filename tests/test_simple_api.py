@@ -206,14 +206,33 @@ class TestConfigure:
         assert pacsys._config_pool_size == 8
         assert pacsys._config_timeout == 20.0
 
-    def test_configure_after_initialization_raises(self, mock_backend):
-        """configure() raises RuntimeError after backend initialization."""
-        # Simulate backend initialization
-        with mock.patch.object(pacsys, "_backend_initialized", True):
-            with pytest.raises(RuntimeError) as exc_info:
-                pacsys.configure(dpm_host="custom.fnal.gov")
+    def test_configure_after_initialization_auto_replaces(self, mock_backend):
+        """configure() auto-replaces backend when already initialized."""
+        pacsys._global_backend = mock_backend
+        pacsys._backend_initialized = True
 
-        assert "configure() must be called before" in str(exc_info.value)
+        pacsys.configure(dpm_host="custom.fnal.gov")
+
+        mock_backend.close.assert_called_once()
+        assert pacsys._global_backend is None
+        assert pacsys._backend_initialized is False
+        assert pacsys._config_dpm_host == "custom.fnal.gov"
+
+    def test_configure_replaces_backend_midway(self):
+        """Full lifecycle: configure → use → configure(new) → verify old closed."""
+        old_backend = FakeBackend()
+        pacsys._global_backend = old_backend
+        pacsys._backend_initialized = True
+
+        old_backend.set_reading("M:OUTTMP", 72.5)
+        assert pacsys.read("M:OUTTMP") == 72.5
+
+        pacsys.configure(backend="grpc", default_timeout=10.0)
+
+        assert old_backend._closed
+        assert pacsys._global_backend is None
+        assert pacsys._config_backend == "grpc"
+        assert pacsys._config_timeout == 10.0
 
     def test_configure_partial_settings(self):
         """configure() only sets specified parameters."""

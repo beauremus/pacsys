@@ -86,8 +86,12 @@ def configure(
 ) -> None:
     """Configure async backend settings.
 
-    Must be called before any read/get operations. Pass None to clear
-    a previously set value (falls back to default).
+    Can be called at any time. If a backend is already initialized, it will
+    be marked as closed and replaced on the next operation. Pass None to
+    clear a previously set value (falls back to default).
+
+    For a graceful close of the old backend (flushing connections), call
+    ``await shutdown()`` before ``configure()``.
 
     Args:
         backend: Backend type - "dpm" or "grpc" (default: "dpm")
@@ -99,17 +103,17 @@ def configure(
         role: Role for authenticated operations (DPM only)
 
     Raises:
-        RuntimeError: If called after backend is initialized
         ValueError: If backend is not a valid type
     """
     global _config_backend, _config_auth, _config_role
     global _config_host, _config_port, _config_pool_size, _config_timeout
+    global _global_async_backend, _async_backend_initialized
 
     if _async_backend_initialized:
-        raise RuntimeError(
-            "configure() must be called before any operations. "
-            "Call await shutdown() first to close the backend, then configure()."
-        )
+        if _global_async_backend is not None:
+            _global_async_backend._closed = True
+            _global_async_backend = None
+        _async_backend_initialized = False
 
     if backend is not _UNSET:
         if backend is not None and backend not in _VALID_ASYNC_BACKENDS:
@@ -225,9 +229,10 @@ async def write(device, value, timeout: Optional[float] = None):
     return await backend.write(drf, value, timeout=timeout)
 
 
-async def write_many(settings: list, timeout: Optional[float] = None):
+async def write_many(settings, timeout: Optional[float] = None):
     """Write multiple device values in a single batch."""
-    resolved = [(_resolve_drf(d), v) for d, v in settings]
+    items = settings.items() if isinstance(settings, dict) else settings
+    resolved = [(_resolve_drf(d), v) for d, v in items]
     backend = _get_global_async_backend()
     return await backend.write_many(resolved, timeout=timeout)
 

@@ -24,6 +24,9 @@ else:
 # Type alias for functions accepting DRF strings or Device objects
 DeviceSpec = Union[str, "Device"]
 
+# Write settings: list of (device, value) tuples or a dict mapping device -> value
+WriteSettings = Union[list[tuple[DeviceSpec, Value]], dict[DeviceSpec, Value]]
+
 # Callback type for streaming subscriptions - receives (reading, handle) pairs
 ReadingCallback = Callable[["Reading", "SubscriptionHandle"], None]
 

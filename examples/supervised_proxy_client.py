@@ -70,6 +70,14 @@ def main():
         except Exception as e:
             print(f"Z:ACLTS2 write denied: {e}")
 
+        # -- Write to allowed and forbidden devices ----------------
+        print("\n=== Write to allowed and forbidden devices ===")
+        try:
+            result = backend.write_many([("Z:ACLTS2", 99.0), ("Z:CUBE_Z", 99.0)])
+            print(f"Z:ACLTS2 write: {result}")
+        except Exception as e:
+            print(f"Z:ACLTS2 write denied: {e}")
+
         # -- Streaming ---------------------------------------------------------
         print("\n=== Streaming (10 readings) ===")
         with backend.subscribe(["M:OUTTMP@p,1000"]) as sub:

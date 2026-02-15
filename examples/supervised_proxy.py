@@ -11,7 +11,9 @@ Demonstrates:
 """
 
 import argparse
+import glob
 import logging
+import os
 from logging.handlers import RotatingFileHandler
 
 import pacsys.aio as aio
@@ -30,6 +32,7 @@ from pacsys.supervised import (
 
 WRITABLE_DEVICES = [
     "Z:ACLTST",
+    "Z:CUBE_Z",
 ]
 
 # -- Custom policy --------------------------------------------------------
@@ -85,6 +88,7 @@ def parse_args():
     p.add_argument("--port", type=int, default=50052, help="gRPC listen port (default: 50052, 0 = OS-assigned)")
     p.add_argument("--host", default="[::]", help="bind address (default: [::])")
     p.add_argument("--token", default=PROXY_TOKEN, help="bearer token for client auth")
+    p.add_argument("--cleanup", action="store_true", help="remove log files on shutdown")
     return p.parse_args()
 
 
@@ -126,6 +130,20 @@ def main():
     print("Audit log: supervised_audit.jsonl + supervised_audit.binpb")
     print("Ctrl+C to stop")
     srv.run()  # blocks until SIGINT/SIGTERM
+
+    if args.cleanup:
+        log_files = [
+            "supervised_audit.jsonl",
+            "supervised_audit.binpb",
+            "supervised_traffic.log",
+            *glob.glob("supervised_traffic.log.*"),
+        ]
+        for f in log_files:
+            try:
+                os.remove(f)
+                print(f"Cleaned up: {f}")
+            except FileNotFoundError:
+                pass
 
 
 if __name__ == "__main__":

@@ -245,7 +245,7 @@ class TestAsyncBackendMixedEvents:
 
     async def test_get_many_mixed_periodic_and_clock_event(self, async_read_backend_cls: AsyncBackend):
         """get_many() returns first reading per device for mixed event types."""
-        devices = [f"{SCALAR_DEVICE}@p,100", f"{SCALAR_DEVICE_2}@e,02"]
+        devices = [f"{SCALAR_DEVICE}@p,100", f"{SCALAR_DEVICE_2}@e,0C"]
 
         readings = await async_read_backend_cls.get_many(devices, timeout=10.0)
 
@@ -274,7 +274,7 @@ class TestAsyncBackendMixedEvents:
 
     async def test_get_many_same_device_periodic_and_clock(self, async_read_backend_cls: AsyncBackend):
         """Same device at periodic and clock event returns two distinct readings."""
-        devices = [f"{SCALAR_DEVICE}@p,500", f"{SCALAR_DEVICE}@e,02"]
+        devices = [f"{SCALAR_DEVICE}@p,500", f"{SCALAR_DEVICE}@e,0C"]
         readings = await async_read_backend_cls.get_many(devices, timeout=10.0)
 
         assert len(readings) == 2
@@ -284,15 +284,15 @@ class TestAsyncBackendMixedEvents:
         assert "@e" in readings[1].drf.lower(), f"Expected clock event in drf: {readings[1].drf}"
 
     async def test_get_many_same_device_two_clock_events(self, async_read_backend_cls: AsyncBackend):
-        """Same device at two different clock events (02 and 1D."""
-        devices = [f"{SCALAR_DEVICE}@e,02", f"{SCALAR_DEVICE}@e,1D"]
+        """Same device at two different clock events (0C and 0F)."""
+        devices = [f"{SCALAR_DEVICE}@e,0C", f"{SCALAR_DEVICE}@e,0F"]
         readings = await async_read_backend_cls.get_many(devices, timeout=10.0)
 
         assert len(readings) == 2
-        assert readings[0].ok, f"Event 02 failed: {readings[0].message}"
-        assert readings[1].ok, f"Event 1D failed: {readings[1].message}"
-        assert "02" in readings[0].drf, f"Expected event 02 in drf: {readings[0].drf}"
-        assert "1D" in readings[1].drf, f"Expected event 1D in drf: {readings[1].drf}"
+        assert readings[0].ok, f"Event 0C failed: {readings[0].message}"
+        assert readings[1].ok, f"Event 0F failed: {readings[1].message}"
+        assert "0C" in readings[0].drf, f"Expected event 0C in drf: {readings[0].drf}"
+        assert "0F" in readings[1].drf, f"Expected event 0F in drf: {readings[1].drf}"
 
 
 # =============================================================================

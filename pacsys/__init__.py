@@ -9,13 +9,14 @@ import logging
 import os
 import threading
 import weakref
-from typing import Any, Optional, Union, TYPE_CHECKING
+from typing import Optional, Union, TYPE_CHECKING
 
 from pacsys.auth import Auth, KerberosAuth, JWTAuth
 from pacsys.drf3 import DataRequest
 from pacsys.types import (
     Value,
     DeviceSpec,
+    WriteSettings,
     ValueType,
     BackendCapability,
     DispatchMode,
@@ -140,25 +141,31 @@ def _atexit_close_backends() -> None:
 atexit.register(_atexit_close_backends)
 
 
-_UNSET: Any = object()  # sentinel: distinguish "not passed" from "passed as None"
+class _Unset:
+    """Sentinel: distinguish 'not passed' from 'passed as None'."""
+
+
+_UNSET = _Unset()
 
 
 def configure(
     *,
-    dpm_host: Optional[str] = _UNSET,
-    dpm_port: Optional[int] = _UNSET,
-    pool_size: Optional[int] = _UNSET,
-    default_timeout: Optional[float] = _UNSET,
-    devdb_host: Optional[str] = _UNSET,
-    devdb_port: Optional[int] = _UNSET,
-    backend: Optional[str] = _UNSET,
-    auth: Optional[Auth] = _UNSET,
-    role: Optional[str] = _UNSET,
+    dpm_host: Optional[str] | _Unset = _UNSET,
+    dpm_port: Optional[int] | _Unset = _UNSET,
+    pool_size: Optional[int] | _Unset = _UNSET,
+    default_timeout: Optional[float] | _Unset = _UNSET,
+    devdb_host: Optional[str] | _Unset = _UNSET,
+    devdb_port: Optional[int] | _Unset = _UNSET,
+    backend: Optional[str] | _Unset = _UNSET,
+    auth: Optional[Auth] | _Unset = _UNSET,
+    role: Optional[str] | _Unset = _UNSET,
 ) -> None:
     """Configure pacsys global settings.
 
-    Must be called BEFORE any read/get operations. Pass None to clear
-    a previously set value (falls back to environment variable or default).
+    Can be called at any time. If a backend is already initialized, it will
+    be automatically shut down before applying the new settings. Pass None
+    to clear a previously set value (falls back to environment variable or
+    default).
 
     Args:
         dpm_host: DPM proxy hostname (default: from PACSYS_DPM_HOST or acsys-proxy.fnal.gov)
@@ -172,7 +179,6 @@ def configure(
         role: Role for authenticated operations (e.g., "testing")
 
     Raises:
-        RuntimeError: If called after any backend is initialized
         ValueError: If backend is not a valid backend type
     """
     global _config_dpm_host, _config_dpm_port, _config_pool_size, _config_timeout
@@ -181,31 +187,46 @@ def configure(
 
     with _global_lock:
         if _backend_initialized or _devdb_initialized:
-            raise RuntimeError(
-                "configure() must be called before any read/get operations. "
-                "Call shutdown() first to close the backend, then configure() to change settings."
-            )
+            logger.debug("configure() called with active backend — auto-replacing")
+            _shutdown_locked()
 
-        if backend is not _UNSET:
+        if not isinstance(backend, _Unset):
             if backend is not None and backend not in _VALID_BACKENDS:
                 raise ValueError(f"Invalid backend {backend!r}, must be one of {sorted(_VALID_BACKENDS)}")
             _config_backend = backend
-        if auth is not _UNSET:
+        if not isinstance(auth, _Unset):
             _config_auth = auth
-        if role is not _UNSET:
+        if not isinstance(role, _Unset):
             _config_role = role
-        if dpm_host is not _UNSET:
+        if not isinstance(dpm_host, _Unset):
             _config_dpm_host = dpm_host
-        if dpm_port is not _UNSET:
+        if not isinstance(dpm_port, _Unset):
             _config_dpm_port = dpm_port
-        if pool_size is not _UNSET:
+        if not isinstance(pool_size, _Unset):
             _config_pool_size = pool_size
-        if default_timeout is not _UNSET:
+        if not isinstance(default_timeout, _Unset):
             _config_timeout = default_timeout
-        if devdb_host is not _UNSET:
+        if not isinstance(devdb_host, _Unset):
             _config_devdb_host = devdb_host
-        if devdb_port is not _UNSET:
+        if not isinstance(devdb_port, _Unset):
             _config_devdb_port = devdb_port
+
+
+def _shutdown_locked() -> None:
+    """Close and reset global backend/devdb state. Caller must hold _global_lock."""
+    global _global_backend, _backend_initialized
+    global _global_devdb, _devdb_initialized
+
+    if _global_backend is not None:
+        _global_backend.close()
+        _global_backend = None
+
+    if _global_devdb is not None:
+        _global_devdb.close()
+        _global_devdb = None
+
+    _backend_initialized = False
+    _devdb_initialized = False
 
 
 def shutdown() -> None:
@@ -221,20 +242,8 @@ def shutdown() -> None:
 
     Safe to call multiple times or when no backend is initialized.
     """
-    global _global_backend, _backend_initialized
-    global _global_devdb, _devdb_initialized
-
     with _global_lock:
-        if _global_backend is not None:
-            _global_backend.close()
-            _global_backend = None
-
-        if _global_devdb is not None:
-            _global_devdb.close()
-            _global_devdb = None
-
-        _backend_initialized = False
-        _devdb_initialized = False
+        _shutdown_locked()
 
 
 def _get_global_backend() -> "Backend":
@@ -483,13 +492,13 @@ def write(device: DeviceSpec, value: Value, timeout: Optional[float] = None) -> 
 
 
 def write_many(
-    settings: list[tuple[DeviceSpec, Value]],
+    settings: WriteSettings,
     timeout: Optional[float] = None,
 ) -> list[WriteResult]:
     """Write multiple device values in a single batch using the global backend.
 
     Args:
-        settings: List of (device, value) tuples
+        settings: List of (device, value) tuples, or a dict mapping device -> value
         timeout: Total timeout for entire batch in seconds
 
     Returns:
@@ -501,7 +510,8 @@ def write_many(
     Thread Safety:
         Safe to call from multiple threads.
     """
-    resolved = [(_resolve_drf(d), v) for d, v in settings]
+    items = settings.items() if isinstance(settings, dict) else settings
+    resolved = [(_resolve_drf(d), v) for d, v in items]
     backend = _get_global_backend()
     return backend.write_many(resolved, timeout=timeout)
 
@@ -985,6 +995,7 @@ __all__ = [
     "DeviceMeta",
     "Reading",
     "WriteResult",
+    "WriteSettings",
     "SubscriptionHandle",
     "CombinedStream",
     "ReadingCallback",

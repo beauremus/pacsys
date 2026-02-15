@@ -138,7 +138,6 @@ class TestDigitalStatusViaDevDB:
         )
         assert status.device == "Z:ACLTST"
         assert status.raw_value == 2
-        # Verify the Ready bit is active
-        ready_bit = status.get("Ready")
-        assert ready_bit is not None
-        assert ready_bit.is_set is True
+        # Verify bit 1 (raw_value=2) is active — name varies by DB config
+        bit1 = status[1]
+        assert bit1.is_set is True

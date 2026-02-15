@@ -5,12 +5,14 @@ import time
 
 import grpc
 import pytest
-from grpc import aio as grpc_aio
 
 from pacsys._proto.controls.service.DAQ.v1 import DAQ_pb2, DAQ_pb2_grpc
 from pacsys.supervised import ReadOnlyPolicy, SupervisedServer, ValueRangePolicy
+from pacsys.supervised._conversions import reading_to_proto_reply, write_result_to_proto_status
 from pacsys.supervised._event_classify import all_oneshot, is_oneshot_event
+from pacsys.supervised._policies import Policy, PolicyDecision, RequestContext
 from pacsys.testing import AsyncFakeBackend, FakeBackend
+from pacsys.types import Reading, ValueType, WriteResult
 
 
 # ── Event Classification ──────────────────────────────────────────────────
@@ -115,9 +117,16 @@ def _make_channel(server):
     return grpc.insecure_channel(f"localhost:{server.port}")
 
 
-def _make_async_channel(server):
-    """Create an async gRPC channel to the server."""
-    return grpc_aio.insecure_channel(f"localhost:{server.port}")
+def _wait_subscribed(backend, timeout=2.0):
+    """Poll until a new subscription appears on the backend."""
+    subs = backend._subscriptions if isinstance(backend, FakeBackend) else backend._sync._subscriptions
+    initial = len(subs)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if len(subs) > initial:
+            return
+        time.sleep(0.01)
+    raise TimeoutError("No new subscription appeared within timeout")
 
 
 # ── Server Lifecycle Tests ────────────────────────────────────────────────
@@ -214,9 +223,8 @@ class TestStreamingRead:
                 request = DAQ_pb2.ReadingList()
                 request.drf.append("M:OUTTMP@p,1000")
 
-                # Emit readings in a separate thread after a short delay
                 def emit():
-                    time.sleep(0.3)
+                    _wait_subscribed(fake_backend)
                     for i in range(3):
                         fake_backend.emit_reading("M:OUTTMP@p,1000", 70.0 + i)
                         time.sleep(0.05)
@@ -230,6 +238,7 @@ class TestStreamingRead:
                     if len(replies) >= 3:
                         break
 
+                emitter.join(timeout=2.0)
                 assert len(replies) == 3
                 values = [r.readings.reading[0].data.scalar for r in replies]
                 assert values == [pytest.approx(70.0), pytest.approx(71.0), pytest.approx(72.0)]
@@ -245,7 +254,7 @@ class TestStreamingRead:
                 request.drf.append("M:OUTTMP@p,1000")
 
                 def emit():
-                    time.sleep(0.3)
+                    _wait_subscribed(fake_backend)
                     fake_backend.emit_reading("M:OUTTMP@p,1000", 99.0)
                     time.sleep(0.5)  # wait so we can detect over-duplication
                     fake_backend.emit_reading("G:AMANDA@p,1000", 55.0)
@@ -259,6 +268,7 @@ class TestStreamingRead:
                     if len(replies) >= 3:
                         break
 
+                emitter.join(timeout=2.0)
                 # First emit (M:OUTTMP) → exactly 2 replies at index 0 and 2
                 # Second emit (G:AMANDA) → 1 reply at index 1
                 assert len(replies) == 3
@@ -478,7 +488,7 @@ class TestAsyncStreamingRead:
                 request.drf.append("M:OUTTMP@p,1000")
 
                 def emit():
-                    time.sleep(0.3)
+                    _wait_subscribed(async_backend)
                     for i in range(3):
                         async_backend.emit_reading("M:OUTTMP@p,1000", 70.0 + i)
                         time.sleep(0.05)
@@ -492,6 +502,7 @@ class TestAsyncStreamingRead:
                     if len(replies) >= 3:
                         break
 
+                emitter.join(timeout=2.0)
                 assert len(replies) == 3
                 values = [r.readings.reading[0].data.scalar for r in replies]
                 assert values == [pytest.approx(70.0), pytest.approx(71.0), pytest.approx(72.0)]
@@ -507,7 +518,7 @@ class TestAsyncStreamingRead:
                 request.drf.append("M:OUTTMP@p,1000")
 
                 def emit():
-                    time.sleep(0.3)
+                    _wait_subscribed(async_backend)
                     async_backend.emit_reading("M:OUTTMP@p,1000", 99.0)
                     time.sleep(0.5)
                     async_backend.emit_reading("G:AMANDA@p,1000", 55.0)
@@ -521,6 +532,7 @@ class TestAsyncStreamingRead:
                     if len(replies) >= 3:
                         break
 
+                emitter.join(timeout=2.0)
                 assert len(replies) == 3
                 m_replies = [r for r in replies if r.readings.reading[0].data.scalar == pytest.approx(99.0)]
                 assert len(m_replies) == 2
@@ -617,6 +629,7 @@ class TestTokenAuthentication:
             md = [("authorization", "Bearer test-secret")]
             reply = stub.Set(request, timeout=5.0, metadata=md)
             assert len(reply.status) == 1
+            assert reply.status[0].status_code == 0
 
     def test_set_rejected_without_token(self, token_server):
         with _make_channel(token_server) as ch:
@@ -657,3 +670,273 @@ class TestTokenAuthentication:
                 request.setting.append(setting)
                 reply = stub.Set(request, timeout=5.0)
                 assert len(reply.status) == 1
+                assert reply.status[0].status_code == 0
+
+
+# ── Backend Exception Mapping Tests ──────────────────────────────────────
+
+
+class _ErrorBackend(FakeBackend):
+    """FakeBackend that raises a configured exception on read/write."""
+
+    def __init__(self, exc: Exception):
+        super().__init__()
+        self._exc = exc
+
+    def get_many(self, drfs, timeout=None):
+        raise self._exc
+
+    def write_many(self, settings, timeout=None):
+        raise self._exc
+
+
+class TestBackendExceptionMapping:
+    def test_read_not_implemented(self):
+        fb = _ErrorBackend(NotImplementedError("subscribe not supported"))
+        _seed_backend(fb)
+        with SupervisedServer(fb, port=0) as srv:
+            with _make_channel(srv) as ch:
+                stub = DAQ_pb2_grpc.DAQStub(ch)
+                request = DAQ_pb2.ReadingList()
+                request.drf.append("M:OUTTMP@I")
+                with pytest.raises(grpc.RpcError) as exc_info:
+                    list(stub.Read(request, timeout=5.0))
+                assert exc_info.value.code() == grpc.StatusCode.UNIMPLEMENTED
+
+    def test_read_authentication_error(self):
+        from pacsys.errors import AuthenticationError
+
+        fb = _ErrorBackend(AuthenticationError("ticket expired"))
+        _seed_backend(fb)
+        with SupervisedServer(fb, port=0) as srv:
+            with _make_channel(srv) as ch:
+                stub = DAQ_pb2_grpc.DAQStub(ch)
+                request = DAQ_pb2.ReadingList()
+                request.drf.append("M:OUTTMP@I")
+                with pytest.raises(grpc.RpcError) as exc_info:
+                    list(stub.Read(request, timeout=5.0))
+                assert exc_info.value.code() == grpc.StatusCode.UNAUTHENTICATED
+
+    def test_read_generic_exception(self):
+        fb = _ErrorBackend(RuntimeError("connection lost"))
+        _seed_backend(fb)
+        with SupervisedServer(fb, port=0) as srv:
+            with _make_channel(srv) as ch:
+                stub = DAQ_pb2_grpc.DAQStub(ch)
+                request = DAQ_pb2.ReadingList()
+                request.drf.append("M:OUTTMP@I")
+                with pytest.raises(grpc.RpcError) as exc_info:
+                    list(stub.Read(request, timeout=5.0))
+                assert exc_info.value.code() == grpc.StatusCode.INTERNAL
+
+    def test_set_not_implemented(self):
+        fb = _ErrorBackend(NotImplementedError("writes not supported"))
+        _seed_backend(fb)
+        with SupervisedServer(fb, port=0) as srv:
+            with _make_channel(srv) as ch:
+                stub = DAQ_pb2_grpc.DAQStub(ch)
+                request = DAQ_pb2.SettingList()
+                setting = DAQ_pb2.Setting()
+                setting.device = "M:OUTTMP"
+                setting.value.scalar = 80.0
+                request.setting.append(setting)
+                with pytest.raises(grpc.RpcError) as exc_info:
+                    stub.Set(request, timeout=5.0)
+                assert exc_info.value.code() == grpc.StatusCode.UNIMPLEMENTED
+
+    def test_set_authentication_error(self):
+        from pacsys.errors import AuthenticationError
+
+        fb = _ErrorBackend(AuthenticationError("no credentials"))
+        _seed_backend(fb)
+        with SupervisedServer(fb, port=0) as srv:
+            with _make_channel(srv) as ch:
+                stub = DAQ_pb2_grpc.DAQStub(ch)
+                request = DAQ_pb2.SettingList()
+                setting = DAQ_pb2.Setting()
+                setting.device = "M:OUTTMP"
+                setting.value.scalar = 80.0
+                request.setting.append(setting)
+                with pytest.raises(grpc.RpcError) as exc_info:
+                    stub.Set(request, timeout=5.0)
+                assert exc_info.value.code() == grpc.StatusCode.UNAUTHENTICATED
+
+    def test_set_generic_exception(self):
+        fb = _ErrorBackend(RuntimeError("backend crashed"))
+        _seed_backend(fb)
+        with SupervisedServer(fb, port=0) as srv:
+            with _make_channel(srv) as ch:
+                stub = DAQ_pb2_grpc.DAQStub(ch)
+                request = DAQ_pb2.SettingList()
+                setting = DAQ_pb2.Setting()
+                setting.device = "M:OUTTMP"
+                setting.value.scalar = 80.0
+                request.setting.append(setting)
+                with pytest.raises(grpc.RpcError) as exc_info:
+                    stub.Set(request, timeout=5.0)
+                assert exc_info.value.code() == grpc.StatusCode.INTERNAL
+
+    def test_set_malformed_value(self):
+        """Setting with unset value oneof returns INVALID_ARGUMENT."""
+        fb = FakeBackend()
+        _seed_backend(fb)
+        with SupervisedServer(fb, port=0) as srv:
+            with _make_channel(srv) as ch:
+                stub = DAQ_pb2_grpc.DAQStub(ch)
+                request = DAQ_pb2.SettingList()
+                setting = DAQ_pb2.Setting()
+                setting.device = "M:OUTTMP"
+                # Leave setting.value unset (no scalar/raw/text)
+                request.setting.append(setting)
+                with pytest.raises(grpc.RpcError) as exc_info:
+                    stub.Set(request, timeout=5.0)
+                assert exc_info.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+
+# ── Conversion Edge Case Tests ───────────────────────────────────────────
+
+
+class TestReadingToProtoReply:
+    def test_error_reading(self):
+        reading = Reading(drf="M:BAD", value_type=ValueType.SCALAR, facility_code=1, error_code=-42, message="broken")
+        reply = reading_to_proto_reply(reading, 3)
+        assert reply.index == 3
+        assert reply.WhichOneof("value") == "status"
+        assert reply.status.facility_code == 1
+        assert reply.status.status_code == -42
+        assert reply.status.message == "broken"
+
+    def test_error_reading_no_message(self):
+        reading = Reading(drf="M:BAD", value_type=ValueType.SCALAR, error_code=-1)
+        reply = reading_to_proto_reply(reading, 0)
+        assert reply.WhichOneof("value") == "status"
+        assert reply.status.message == ""
+
+    def test_success_with_timestamp(self):
+        from datetime import datetime, timezone
+
+        ts = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        reading = Reading(drf="M:OK", value_type=ValueType.SCALAR, value=42.0, timestamp=ts)
+        reply = reading_to_proto_reply(reading, 0)
+        assert reply.WhichOneof("value") == "readings"
+        rd = reply.readings.reading[0]
+        assert rd.data.scalar == pytest.approx(42.0)
+        assert rd.timestamp.seconds > 0
+
+    def test_success_without_timestamp(self):
+        reading = Reading(drf="M:OK", value_type=ValueType.SCALAR, value=10.0, timestamp=None)
+        reply = reading_to_proto_reply(reading, 0)
+        rd = reply.readings.reading[0]
+        assert rd.data.scalar == pytest.approx(10.0)
+        assert rd.timestamp.seconds == 0  # unset proto timestamp
+
+    def test_success_with_none_value(self):
+        reading = Reading(drf="M:OK", value_type=ValueType.SCALAR, value=None, error_code=0)
+        reply = reading_to_proto_reply(reading, 0)
+        # ok=False because value is None, so status oneof is used
+        assert reply.WhichOneof("value") == "status"
+
+    def test_success_message_propagated(self):
+        reading = Reading(drf="M:OK", value_type=ValueType.SCALAR, value=1.0, message="info")
+        reply = reading_to_proto_reply(reading, 0)
+        rd = reply.readings.reading[0]
+        assert rd.status.message == "info"
+
+    def test_success_no_message(self):
+        reading = Reading(drf="M:OK", value_type=ValueType.SCALAR, value=1.0)
+        reply = reading_to_proto_reply(reading, 0)
+        rd = reply.readings.reading[0]
+        assert rd.status.message == ""
+
+    def test_facility_code_propagated(self):
+        reading = Reading(drf="M:OK", value_type=ValueType.SCALAR, value=1.0, facility_code=16)
+        reply = reading_to_proto_reply(reading, 0)
+        rd = reply.readings.reading[0]
+        assert rd.status.facility_code == 16
+
+
+class TestWriteResultToProtoStatus:
+    def test_success(self):
+        result = WriteResult(drf="M:OK", error_code=0)
+        status = write_result_to_proto_status(result)
+        assert status.status_code == 0
+        assert status.facility_code == 0
+        assert status.message == ""
+
+    def test_error_with_message(self):
+        result = WriteResult(drf="M:BAD", facility_code=1, error_code=-99, message="write failed")
+        status = write_result_to_proto_status(result)
+        assert status.status_code == -99
+        assert status.facility_code == 1
+        assert status.message == "write failed"
+
+    def test_error_without_message(self):
+        result = WriteResult(drf="M:BAD", error_code=-1)
+        status = write_result_to_proto_status(result)
+        assert status.status_code == -1
+        assert status.message == ""
+
+
+# ── Policy Reorder Index Mapping Tests ───────────────────────────────────
+
+
+class _SwapPolicy(Policy):
+    """Policy that reverses the DRF order to test index mapping."""
+
+    def check(self, ctx: RequestContext) -> PolicyDecision:
+        new_ctx = RequestContext(
+            drfs=list(reversed(ctx.drfs)),
+            rpc_method=ctx.rpc_method,
+            peer=ctx.peer,
+            metadata=ctx.metadata,
+            values=list(reversed(ctx.values)),
+            raw_request=ctx.raw_request,
+        )
+        return PolicyDecision(allowed=True, ctx=new_ctx)
+
+
+class TestPolicyReorderIndexMapping:
+    def test_read_reorder_preserves_original_indices(self):
+        """Policy reverses [M:OUTTMP, G:AMANDA] but client gets correct index mapping."""
+        fb = FakeBackend()
+        fb.set_reading("M:OUTTMP", 72.5)
+        fb.set_reading("G:AMANDA", 42.0)
+        with SupervisedServer(fb, port=0, policies=[_SwapPolicy()]) as srv:
+            with _make_channel(srv) as ch:
+                stub = DAQ_pb2_grpc.DAQStub(ch)
+                request = DAQ_pb2.ReadingList()
+                request.drf.append("M:OUTTMP@I")
+                request.drf.append("G:AMANDA@I")
+
+                replies = list(stub.Read(request, timeout=5.0))
+                assert len(replies) == 2
+                by_index = {r.index: r.readings.reading[0].data.scalar for r in replies}
+                # Index 0 = M:OUTTMP (72.5), Index 1 = G:AMANDA (42.0)
+                assert by_index[0] == pytest.approx(72.5)
+                assert by_index[1] == pytest.approx(42.0)
+
+    def test_set_reorder_preserves_original_indices(self):
+        """Policy reverses settings order but status indices match original request."""
+        fb = FakeBackend()
+        fb.set_reading("M:OUTTMP", 72.5)
+        fb.set_reading("G:AMANDA", 42.0)
+        fb.set_write_result("M:OUTTMP", success=True)
+        fb.set_write_result("G:AMANDA", success=False, error_code=-1, message="fail")
+        with SupervisedServer(fb, port=0, policies=[_SwapPolicy()]) as srv:
+            with _make_channel(srv) as ch:
+                stub = DAQ_pb2_grpc.DAQStub(ch)
+                request = DAQ_pb2.SettingList()
+                s1 = DAQ_pb2.Setting()
+                s1.device = "M:OUTTMP"
+                s1.value.scalar = 80.0
+                request.setting.append(s1)
+                s2 = DAQ_pb2.Setting()
+                s2.device = "G:AMANDA"
+                s2.value.scalar = 50.0
+                request.setting.append(s2)
+
+                reply = stub.Set(request, timeout=5.0)
+                assert len(reply.status) == 2
+                # Index 0 = M:OUTTMP (success), Index 1 = G:AMANDA (fail)
+                assert reply.status[0].status_code == 0
+                assert reply.status[1].status_code == -1
