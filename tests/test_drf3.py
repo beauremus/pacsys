@@ -147,6 +147,20 @@ _NO_RANGE = parse_range(None)
             "E:TRTGTD.READING@e,AE,e,1000",
             "E:TRTGTD@e,AE,e,1000",
         ),
+        # Periodic with Hz unit suffix (100H = 100 Hz)
+        (
+            "M:OUTTMP@p,100H",
+            ("M:OUTTMP", DRF_PROPERTY.READING, _NO_RANGE, DRF_FIELD.SCALED, PeriodicEvent("p,100H", "P")),
+            "M:OUTTMP.READING@p,100H",
+            "M:OUTTMP@p,100H",
+        ),
+        # Periodic with seconds unit suffix (2S = 2 seconds = 2000ms)
+        (
+            "M:OUTTMP@p,2S",
+            ("M:OUTTMP", DRF_PROPERTY.READING, _NO_RANGE, DRF_FIELD.SCALED, PeriodicEvent("p,2S", "P")),
+            "M:OUTTMP.READING@p,2S",
+            "M:OUTTMP@p,2S",
+        ),
     ],
 )
 def test_drf_parse(drf, expected_parts, expected_canonical, expected_qualified):
@@ -179,9 +193,29 @@ def test_get_qualified_device():
         ("M:OUTTMP", "M:OUTTMP@I"),
         ("B:HS23T[0:10]", "B:HS23T[0:10]@I"),
         ("M:OUTTMP@p,1000", "M:OUTTMP@p,1000"),
+        ("M:OUTTMP@p,100H", "M:OUTTMP@p,100H"),
         ("M:OUTTMP@E,0F", "M:OUTTMP@E,0F"),
         ("M:OUTTMP@I", "M:OUTTMP@I"),
+        ("M:OUTTMP<-FTP", "M:OUTTMP@I<-FTP"),
+        ("M:OUTTMP@p,100H<-FTP", "M:OUTTMP@p,100H<-FTP"),
     ],
 )
 def test_ensure_immediate_event(drf, expected):
     assert ensure_immediate_event(drf) == expected
+
+
+@pytest.mark.parametrize(
+    "raw,expected_ms",
+    [
+        ("500", 500),  # default = ms
+        ("1000M", 1000),  # explicit ms
+        ("2S", 2000),  # seconds
+        ("100H", 10),  # 100 Hz = 10ms
+        ("10H", 100),  # 10 Hz = 100ms
+        ("1K", 1),  # 1 kHz = 1ms
+    ],
+)
+def test_parse_time_freq(raw, expected_ms):
+    from pacsys.drf3.event import _parse_time_freq
+
+    assert _parse_time_freq(raw) == expected_ms

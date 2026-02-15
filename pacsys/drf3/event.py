@@ -1,6 +1,29 @@
 import re
 from typing import Optional
 
+# DRF2 time-freq: dec-number [ S | M | U | H | K ]
+_TIME_FREQ_RE = re.compile(r"^(\d+)([SMUHK])?$", re.IGNORECASE)
+
+
+def _parse_time_freq(raw: str) -> int:
+    """Parse a DRF2 time-freq value and return milliseconds."""
+    m = _TIME_FREQ_RE.match(raw)
+    if m is None:
+        raise ValueError(f"Bad time-freq value: {raw}")
+    num = int(m.group(1))
+    unit = (m.group(2) or "M").upper()
+    if unit == "S":
+        return num * 1000
+    if unit == "M":
+        return num
+    if unit == "U":
+        return max(num // 1000, 1) if num else 0
+    if unit == "H":
+        return int(1000 / num) if num else 0
+    if unit == "K":
+        return max(int(1 / num), 1) if num else 0
+    raise ValueError(f"Bad time-freq unit: {unit}")
+
 
 def parse_event(parse_str: Optional[str]):
     if parse_str is None:
@@ -53,14 +76,13 @@ class ImmediateEvent(DRF_EVENT):
 class PeriodicEvent(DRF_EVENT):
     def __init__(self, raw_string, mode):
         super().__init__(raw_string, mode)
-        # This doesn't set things for now
         match = re.match("(?i)(P|Q)(?:,(\\w+)(?:,(F|FALSE|T|TRUE))?)?" + "$", raw_string)
         if match is None:
             raise ValueError(f"Bad periodic event {raw_string}")
         imm = True
         freq = 1000
         if match.group(2) is not None:
-            freq = int(match.group(2))
+            freq = _parse_time_freq(match.group(2))
             if match.group(3) is not None:
                 imm = match.group(3)[0].upper() == "T"
         self.cont = match.group(1)[0] == "P"
@@ -74,14 +96,13 @@ class ClockEvent(DRF_EVENT):
         match = re.match("(?i)E,([0-9A-F]+)(?:,([HSE])(?:,(\\w+))?)?" + "$", raw_string)
         if match is None:
             raise ValueError(f"Bad clock event {raw_string}")
-        # Not used
         evt = int(match.group(1), 16)
         delay = 0
         clock_type = "either"
         if match.group(2) is not None:
             clock_type = match.group(2)
             if match.group(3) is not None:
-                delay = int(match.group(3))
+                delay = _parse_time_freq(match.group(3))
         self.evt = evt
         self.delay = delay
         self.clock_type = clock_type
