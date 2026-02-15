@@ -28,7 +28,6 @@ def reading_to_proto_reply(reading: Reading, index: int) -> "DAQ_pb2.ReadingRepl
             reply.status.message = reading.message
         return reply
 
-    # Success path: pack into Readings
     rd = DAQ_pb2.Reading()  # type: ignore[unresolved-attribute]
     if reading.timestamp is not None:
         ts = timestamp_pb2.Timestamp()

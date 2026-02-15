@@ -13,6 +13,7 @@ The `SupervisedServer` is a gRPC proxy that wraps any Backend, forwarding reques
 Use cases:
 
 - **Testing** -- expose a `FakeBackend` as a real gRPC server for integration tests
+- **Digital twins** -- connect to arbitrary data sources, EPICS soft IOC style
 - **Access control** -- restrict which devices or operations are allowed
 - **Rate limiting** -- throttle requests per client
 - **Value limiting** -- enforce safe ranges and slew rates on writes
@@ -42,7 +43,7 @@ with SupervisedServer(fb, port=50099, policies=[ReadOnlyPolicy()]) as srv:
 ## SupervisedServer
 
 ```python
-SupervisedServer(backend, port=50051, host="[::]", policies=None)
+SupervisedServer(backend, port=50051, host="[::]", policies=None, token=None, audit_log=None)
 ```
 
 | Parameter | Type | Default | Description |
@@ -51,6 +52,8 @@ SupervisedServer(backend, port=50051, host="[::]", policies=None)
 | `port` | `int` | `50051` | Port to listen on (use `0` for OS-assigned) |
 | `host` | `str` | `[::]` | Bind address |
 | `policies` | `list[Policy]` | `None` | Policy chain for access control |
+| `token` | `str \| None` | `None` | Bearer token for write authentication. When set, clients must pass `JWTAuth(token=...)` with this value or write (`Set`) RPCs are rejected with `UNAUTHENTICATED`. Reads are always open. |
+| `audit_log` | `AuditLog \| None` | `None` | Structured audit log instance (see [AuditLog](#auditlog)) |
 
 ### Lifecycle
 
@@ -178,6 +181,63 @@ policies = [SlewRatePolicy(limits={"M:*": SlewLimit(max_step=10.0, max_rate=5.0)
 | `max_step` | `float \| None` | `None` | Max absolute change per write |
 | `max_rate` | `float \| None` | `None` | Max units/second |
 
+### AuditLog
+
+Structured audit log that writes JSON lines and optionally tagged length-delimited binary protobuf. Not a `Policy` — passed as a separate `audit_log=` parameter to `SupervisedServer`. Logs both allowed and denied requests. Called automatically by the server after each policy decision.
+
+Two modes controlled by `log_responses`:
+
+- `False` (default): one `"in"` JSON entry + request protobuf per RPC.
+- `True`: `"in"` entry per request AND `"out"` entry per response protobuf.
+
+```python
+from pacsys.supervised import AuditLog, SupervisedServer
+
+# Request-only logging (JSON lines)
+audit = AuditLog("audit.jsonl")
+
+# Full request+response logging with binary protobuf capture
+audit = AuditLog(
+    "audit.jsonl",
+    proto_path="audit.binpb",
+    log_responses=True,
+    flush_interval=50,
+)
+
+with SupervisedServer(backend, port=50051, audit_log=audit) as srv:
+    srv.wait()
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `path` | `str` | *(required)* | JSON lines file path |
+| `proto_path` | `str \| None` | `None` | Binary protobuf file path (optional) |
+| `log_responses` | `bool` | `False` | Log outgoing responses too |
+| `flush_interval` | `int` | `1` | Flush files every N writes |
+
+**JSON schema — request (`dir: "in"`):**
+
+```json
+{"ts": "2026-02-15T14:30:01.123456+00:00", "seq": 42, "dir": "in", "peer": "ipv4:192.168.1.5:43210", "method": "Set", "drfs": ["M:OUTTMP@e,01"], "allowed": true, "reason": null}
+```
+
+**JSON schema — response (`dir: "out"`, only when `log_responses=True`):**
+
+```json
+{"ts": "2026-02-15T14:30:01.135456+00:00", "seq": 42, "dir": "out", "peer": "ipv4:192.168.1.5:43210", "method": "Set"}
+```
+
+**Binary protobuf framing:** `tag_byte + varint_length + serialized_bytes`. Tags identify message type:
+
+| Tag | Message type |
+|-----|-------------|
+| `0x00` | `ReadRequest` |
+| `0x01` | `ReadReply` |
+| `0x02` | `SettingRequest` |
+| `0x03` | `SettingReply` |
+
+The server calls `close()` automatically on `stop()`.
+
 ### Combining Policies
 
 Policies compose naturally -- stack them in order of priority:
@@ -186,16 +246,19 @@ Policies compose naturally -- stack them in order of priority:
 from pacsys.supervised import (
     SupervisedServer, ReadOnlyPolicy, DeviceAccessPolicy,
     RateLimitPolicy, ValueRangePolicy, SlewRatePolicy, SlewLimit,
+    AuditLog,
 )
 
+audit = AuditLog("audit.jsonl", proto_path="audit.binpb", log_responses=True)
+
 policies = [
-    DeviceAccessPolicy(patterns=["M:*", "G:*"]),           # only M: and G: devices
-    RateLimitPolicy(max_requests=200, window_seconds=60),   # throttle per client
-    ValueRangePolicy(limits={"M:*": (0.0, 100.0)}),        # safe range for M:
+    DeviceAccessPolicy(patterns=["M:*", "G:*"]),             # only M: and G: devices
+    RateLimitPolicy(max_requests=200, window_seconds=60),    # throttle per client
+    ValueRangePolicy(limits={"M:*": (0.0, 100.0)}),          # safe range for M:
     SlewRatePolicy(limits={"M:*": SlewLimit(max_step=10.0, max_rate=5.0)}),
 ]
 
-with SupervisedServer(backend, port=50051, policies=policies) as srv:
+with SupervisedServer(backend, port=50051, policies=policies, audit_log=audit) as srv:
     srv.wait()
 ```
 
@@ -215,36 +278,6 @@ class BusinessHoursPolicy(Policy):
         if 8 <= hour < 17:
             return PolicyDecision(allowed=True)
         return PolicyDecision(allowed=False, reason="Outside business hours (8-17)")
-```
-
-```python
-import threading
-from google.protobuf.internal.encoder import _EncodeVarint
-
-class ProtoRecorderPolicy(Policy):
-    """Append every raw protobuf request to a length-delimited binary file.
-
-    Opens the file lazily on first request. Each message is written as
-    a varint-prefixed serialized protobuf (standard length-delimited
-    format, readable by ``protoc --decode``).
-    """
-
-    def __init__(self, path: str):
-        self._path = path
-        self._lock = threading.Lock()
-        self._file = None
-
-    def check(self, ctx: RequestContext) -> PolicyDecision:
-        raw = ctx.raw_request
-        if raw is not None and hasattr(raw, "SerializeToString"):
-            data = raw.SerializeToString()
-            with self._lock:
-                if self._file is None:
-                    self._file = open(self._path, "ab")
-                _EncodeVarint(self._file.write, len(data))
-                self._file.write(data)
-                self._file.flush()
-        return PolicyDecision(allowed=True)
 ```
 
 `RequestContext` fields:

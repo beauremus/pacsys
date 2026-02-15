@@ -33,8 +33,8 @@ class PolicyDecision:
     """
 
     allowed: bool
-    reason: Optional[str] = None  # required when denied
-    ctx: Optional[RequestContext] = None  # modified context, None = no change
+    reason: Optional[str] = None
+    ctx: Optional[RequestContext] = None
 
     def __post_init__(self):
         if not self.allowed and not self.reason:
@@ -122,7 +122,6 @@ class RateLimitPolicy(Policy):
 
         with self._lock:
             times = self._timestamps.get(ctx.peer, [])
-            # Prune expired entries
             times = [t for t in times if t > cutoff]
 
             if len(times) >= self._max_requests:

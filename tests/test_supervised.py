@@ -576,3 +576,84 @@ class TestAsyncPolicyEnforcement:
             with pytest.raises(grpc.RpcError) as exc_info:
                 stub.Set(request, timeout=5.0)
             assert exc_info.value.code() == grpc.StatusCode.PERMISSION_DENIED
+
+
+# ── Token Authentication ─────────────────────────────────────────────────
+
+
+@pytest.fixture(scope="module")
+def token_backend():
+    fb = FakeBackend()
+    _seed_backend(fb)
+    return fb
+
+
+@pytest.fixture(scope="module")
+def token_server(token_backend):
+    srv = SupervisedServer(token_backend, port=0, token="test-secret")
+    srv.start()
+    yield srv
+    srv.stop()
+
+
+class TestTokenAuthentication:
+    def test_read_allowed_without_token(self, token_server):
+        """Reads are open — token only guards writes."""
+        with _make_channel(token_server) as ch:
+            stub = DAQ_pb2_grpc.DAQStub(ch)
+            request = DAQ_pb2.ReadingList()
+            request.drf.append("M:OUTTMP@I")
+            replies = list(stub.Read(request, timeout=5.0))
+            assert len(replies) == 1
+
+    def test_set_with_valid_token(self, token_server):
+        with _make_channel(token_server) as ch:
+            stub = DAQ_pb2_grpc.DAQStub(ch)
+            request = DAQ_pb2.SettingList()
+            setting = DAQ_pb2.Setting()
+            setting.device = "M:OUTTMP"
+            setting.value.scalar = 80.0
+            request.setting.append(setting)
+            md = [("authorization", "Bearer test-secret")]
+            reply = stub.Set(request, timeout=5.0, metadata=md)
+            assert len(reply.status) == 1
+
+    def test_set_rejected_without_token(self, token_server):
+        with _make_channel(token_server) as ch:
+            stub = DAQ_pb2_grpc.DAQStub(ch)
+            request = DAQ_pb2.SettingList()
+            setting = DAQ_pb2.Setting()
+            setting.device = "M:OUTTMP"
+            setting.value.scalar = 80.0
+            request.setting.append(setting)
+            with pytest.raises(grpc.RpcError) as exc_info:
+                stub.Set(request, timeout=5.0)
+            assert exc_info.value.code() == grpc.StatusCode.UNAUTHENTICATED
+
+    def test_set_rejected_with_wrong_token(self, token_server):
+        with _make_channel(token_server) as ch:
+            stub = DAQ_pb2_grpc.DAQStub(ch)
+            request = DAQ_pb2.SettingList()
+            setting = DAQ_pb2.Setting()
+            setting.device = "M:OUTTMP"
+            setting.value.scalar = 80.0
+            request.setting.append(setting)
+            md = [("authorization", "Bearer wrong-token")]
+            with pytest.raises(grpc.RpcError) as exc_info:
+                stub.Set(request, timeout=5.0, metadata=md)
+            assert exc_info.value.code() == grpc.StatusCode.UNAUTHENTICATED
+
+    def test_no_token_config_allows_all(self):
+        """Server without token= accepts any request including writes."""
+        fb = FakeBackend()
+        _seed_backend(fb)
+        with SupervisedServer(fb, port=0) as srv:
+            with _make_channel(srv) as ch:
+                stub = DAQ_pb2_grpc.DAQStub(ch)
+                request = DAQ_pb2.SettingList()
+                setting = DAQ_pb2.Setting()
+                setting.device = "M:OUTTMP"
+                setting.value.scalar = 80.0
+                request.setting.append(setting)
+                reply = stub.Set(request, timeout=5.0)
+                assert len(reply.status) == 1

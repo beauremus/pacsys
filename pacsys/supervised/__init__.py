@@ -16,6 +16,7 @@ Example:
             print(client.read("M:OUTTMP"))
 """
 
+from ._audit import AuditLog
 from ._policies import (
     DeviceAccessPolicy,
     Policy,
@@ -32,6 +33,7 @@ from ._server import SupervisedServer
 
 __all__ = [
     "SupervisedServer",
+    "AuditLog",
     "Policy",
     "PolicyDecision",
     "RequestContext",
