@@ -25,6 +25,7 @@ from .devices import (
     CONTROL_PAIRS,
     CONTROL_RESET,
     DEVICE_TYPES,
+    FTP_DEVICE,
     NONEXISTENT_DEVICE,
     NOPROP_DEVICE,
     PERIODIC_DEVICE,
@@ -519,6 +520,49 @@ class TestBackendStreaming:
 
         assert len(readings) >= 1, "Expected at least one error/warning reading for nonexistent device"
         assert readings[0].is_error or readings[0].is_warning
+
+
+# =============================================================================
+# FTP (Fast Time Plot) Tests - DPM backends only
+# =============================================================================
+
+
+def _skip_if_not_dpm(backend):
+    """Skip test if backend is not a DPM-based backend (only DPM understands <-FTP)."""
+    from pacsys.backends.dpm_http import DPMHTTPBackend
+
+    try:
+        from pacsys.backends.grpc_backend import GRPCBackend
+    except ImportError:
+        GRPCBackend = None
+
+    if not isinstance(backend, DPMHTTPBackend) and not (GRPCBackend and isinstance(backend, GRPCBackend)):
+        pytest.skip(f"Backend {backend.__class__.__name__} does not support <-FTP routing")
+
+
+class TestBackendFTP:
+    """FTP read tests via DPM's <-FTP extra qualifier."""
+
+    def test_get_ftp(self, read_backend_cls: Backend):
+        """get() with <-FTP returns timestamped scalar array from FTPMAN at ~100 Hz."""
+        _skip_if_not_dpm(read_backend_cls)
+        _skip_if_no_stream(read_backend_cls)
+
+        reading = read_backend_cls.get(FTP_DEVICE, timeout=TIMEOUT_READ)
+
+        assert reading.ok, f"Failed to read {FTP_DEVICE}: {reading.message}"
+        assert reading.value_type == ValueType.TIMED_SCALAR_ARRAY
+        assert "data" in reading.value and "micros" in reading.value
+        assert len(reading.value["data"]) > 0
+        assert len(reading.value["data"]) == len(reading.value["micros"])
+        assert reading.timestamp is not None
+
+        # Verify sample spacing is ~10ms (100 Hz)
+        micros = reading.value["micros"]
+        assert len(micros) >= 2, f"FTP should return multiple samples, got {len(micros)}"
+        deltas_us = [micros[i + 1] - micros[i] for i in range(len(micros) - 1)]
+        avg_delta_ms = sum(deltas_us) / len(deltas_us) / 1000.0
+        assert 9.0 < avg_delta_ms < 11.0, f"Expected ~10ms spacing, got {avg_delta_ms:.2f}ms"
 
 
 # =============================================================================

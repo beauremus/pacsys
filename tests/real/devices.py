@@ -285,6 +285,9 @@ PERIODIC_DEVICE = "M:OUTTMP@p,500"
 FAST_PERIODIC = "M:OUTTMP@p,300"
 SLOW_PERIODIC = "M:OUTTMP@p,1000"
 
+# FTP (Fast Time Plot) - routed via DPM's <-FTP extra qualifier
+FTP_DEVICE = "M:OUTTMP@p,100H<-FTP"
+
 # =============================================================================
 # Alarm Value Transformations
 # =============================================================================

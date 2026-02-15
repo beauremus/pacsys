@@ -110,6 +110,19 @@ from .ftp import (
     get_ftp_class_info,
     get_snap_class_info,
 )
+from .ftp_spec import (
+    ClockSample,
+    ClockTrigger,
+    DeviceTrigger,
+    ExternalSample,
+    ExternalTrigger,
+    FTPSpec,
+    PeriodicSample,
+    ReArmSpec,
+    SnapshotSpec,
+    StateTrigger,
+    parse_ftp_event,
+)
 from .rad50 import decode, decode_stripped, encode
 
 __all__ = [
@@ -170,6 +183,18 @@ __all__ = [
     "SnapClassInfo",
     "get_ftp_class_info",
     "get_snap_class_info",
+    # FTP Spec Parser
+    "FTPSpec",
+    "SnapshotSpec",
+    "parse_ftp_event",
+    "ClockTrigger",
+    "DeviceTrigger",
+    "ExternalTrigger",
+    "StateTrigger",
+    "PeriodicSample",
+    "ClockSample",
+    "ExternalSample",
+    "ReArmSpec",
     # Constants
     "ACNET_PORT",
     "ACNET_TCP_PORT",

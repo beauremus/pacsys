@@ -210,9 +210,15 @@ def test_ensure_immediate_event(drf, expected):
         ("500", 500),  # default = ms
         ("1000M", 1000),  # explicit ms
         ("2S", 2000),  # seconds
+        ("500U", 1),  # 500 us -> 0.5ms -> java_round = 1ms
+        ("1500U", 2),  # 1500 us -> 1.5ms -> java_round = 2ms
+        ("1U", 0),  # 1 us -> round(0.001) = 0ms
         ("100H", 10),  # 100 Hz = 10ms
         ("10H", 100),  # 10 Hz = 100ms
+        ("60H", 17),  # 60 Hz -> round(16.667) = 17ms
         ("1K", 1),  # 1 kHz = 1ms
+        ("3K", 0),  # 3 kHz -> round(0.333) = 0ms
+        ("0H", 0),  # zero is always 0ms
     ],
 )
 def test_parse_time_freq(raw, expected_ms):
