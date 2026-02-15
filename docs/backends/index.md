@@ -11,17 +11,17 @@ flowchart TB
     end
 
     subgraph CS[Central Services]
-        DPM[Data Pool Manager]
+        DPM[DPM]
         ACL[ACL CGI]
         DMQ[DataBroker<br>Bunny OAC/DAE]
-        DB["DB (PostgreSQL)"]
+        DB[PostgreSQL]
         CLX[CLX nodes]
     end
 
     FE[Frontends]
     OT[Other tasks]
 
-    P -->|DPM/HTTP<br>TCP:6802<br>Binary protocol| DPM
+    P -->|DPM/HTTP<br>TCP:6802<br>SDD| DPM
     P -->|DPM/gRPC<br>gRPC:50051<br>Protobuf| DPM
     P -->|HTTPS:443<br>CGI script| ACL
     P -->|DMQ<br>TCP:5672<br>AMQP| DMQ
@@ -53,7 +53,7 @@ flowchart TB
 
 ## Implicit Write Conversion
 
-All write-capable backends (DPM/HTTP, DPM/gRPC, DMQ) automatically prepare DRF strings for writing when you call `write()`:
+All write-capable backends (DPM/HTTP, DPM/gRPC, DMQ) automatically adjust DRF strings when you call `write()`:
 
 - **READING → SETTING**: `M:OUTTMP` becomes `M:OUTTMP.SETTING@N`
 - **STATUS → CONTROL**: `M:OUTTMP.STATUS` becomes `M:OUTTMP.CONTROL@N`
@@ -63,35 +63,15 @@ The `@N` ("never") event tells the server not to send periodic data back - write
 
 ---
 
-## Choosing a Backend
-
-```mermaid
-flowchart TD
-    A[Need to write?] -->|Yes| B[Have Kerberos?]
-    A -->|No| C{Network?}
-
-    B -->|Yes| D{Access issues?}
-    B -->|No| E[Have JWT?]
-
-    D -->|Yes| DMQ[DMQ]
-    D -->|No| DPM[DPM/HTTP]
-
-    E -->|Yes| F[DPM/gRPC]
-    E -->|No| G[Cannot write]
-
-    C -->|Outside controls| DPM
-    C -->|Inside controls| F2[DPM/gRPC]
-```
-
-### Recommendations
+## Backend recommendations
 
 | Scenario | Backend |
 |----------|---------|
-| General use (read/write/stream) | **DPM/HTTP** |
-| High-performance with JWT | **DPM/gRPC** |
-| Full access via RabbitMQ | **DMQ** |
-| Quick read-only checks | **ACL** |
-| No auth available, read-only | **ACL** |
+| Good-enough read/write | **DPM/HTTP** |
+| High-performance with JWT token (ask ACORN when this will work) | **DPM/gRPC** |
+| High-performance read-only (works now) | **DPM/gRPC** |
+| Fallback if DPM has issues/bugs | **DMQ** |
+| Last resort | **ACL** |
 
 ---
 

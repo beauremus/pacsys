@@ -15,10 +15,10 @@ Low-level features:
 - **Raw ACNET UDP/TCP** - talk like a civilized member of ACNET society
 - **FTPMAN for snapshots** - yes, really
 - **SSH utilities and ACL-over-SSH** - authenticated command runners, useful for ACL/DABBEL
-- **DevDB integration** - use database info for better interpretation of device properties
+- **DevDB integration** - formatted interpretation of device properties (auto-used if available)
 
 
-## Quick Example
+## Example
 
 ```python
 import pacsys
@@ -27,74 +27,27 @@ import pacsys
 temperature = pacsys.read("M:OUTTMP@I")         #  72.5
 print(f"Temperature: {temperature}")
 
-# Stream
+# Stream periodic
 with pacsys.subscribe(["M:OUTTMP@p,1000"]) as stream:
     for reading, _ in stream.readings(timeout=30):
         print(f"{reading.name}: {reading.value}")
 
-# Write (tries default auth like default kerberos ticket)
+# Write (uses default auth)
 pacsys.write("Z:ACLTST", 72.5)
 ```
 
-## Backend API
-To gain more control over how and where requests go, use backend API.
-
-```python
-# Specify DPM/HTTP backend with specific kerberos principal and role
-with pacsys.dpm(auth=pacsys.KerberosAuth(), role="testing") as backend:
-    temperature = backend.read("M:OUTTMP")
-    print(f"Temperature: {temperature}")
-    backend.write("Z:ACLTST", 72.5)
-```
-
-## Device API
-
-For device-centric workflows, the `Device` class provides an object-oriented interface with DRF validation, typed reads, and write verification:
-
-```python
-from pacsys import Device, ScalarDevice, Verify
-
-dev = Device("M:OUTTMP")
-
-# Read different properties
-temperature = dev.read()               # READING (scaled)
-setpoint = dev.setting()               # SETTING
-is_on = dev.status(field="on")         # STATUS field (bool)
-desc = dev.description()               # DESCRIPTION (str)
-
-# Full reading with metadata
-reading = dev.get()
-print(f"{reading.value} {reading.units}")  # e.g. "72.5 DegF"
-
-# Typed devices enforce return types
-temp = ScalarDevice("M:OUTTMP")        # read() -> float
-
-# Write with automatic readback verification
-result = dev.write(72.5, verify=Verify(tolerance=0.5))
-
-# Control commands
-dev.on()
-dev.off()
-dev.reset()
-
-# Immutable fluent modifications
-periodic = dev.with_event("p,1000")
-sliced = dev.with_range(0, 10)
-```
-
-See the [Device API guide](guide/device-api.md) for full documentation.
+See the [Quickstart](quickstart.md) for more examples or jump directly to relevant user guide section.
 
 ## Backends
 
-PACSys connects to services using backends:
+Multiple backends are implemented:
 
 | Backend | Protocol | Auth Required |
 |---------|----------|---------------|
-| **DPM/HTTP** | TCP + binary protocol | Kerberos (for writes) |
+| **DPM/HTTP** | TCP + SDD | Kerberos (for writes) |
 | **DPM/gRPC** | TCP + gRPC | JWT token (for writes) |
-| **DMQ** | TCP + AMQP + binary protocol | Kerberos (mandatory) |
+| **DMQ** | TCP + AMQP + SDD | Kerberos (mandatory) |
 | **ACL/HTTP** | TCP + HTTP/CGI | None (read-only) |
-| **SSH utilities** | TCP + SSH | Kerberos (mandatory) |
 
 See [Backends](backends/index.md) for details.
 

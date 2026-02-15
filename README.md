@@ -11,14 +11,21 @@
 
 ## About
 
-ACNET (Accelerator Control NETwork) is the control system used at Fermilab's particle accelerators. PACSysprovides a simple Python interface to read, write, and stream ACNET data without needing to understand the underlying protocols.
+ACNET (Accelerator Control NETwork) is the control system used at Fermilab's particle accelerators. PACSys provides a simple Python interface to read, write, and stream ACNET data without needing to understand the underlying protocols.
 
 ## Features
 
 - **Read/Write/Stream** any ACNET data types with synchronous or async APIs
-- **Multiple backends** to connect to DPM, DMQ, and other services
+- **Multiple backends** to connect to DPM, DMQ, and ACL
 - **Full DRF3 parser** for data requests with automatic conversion
-- **Utilities** for device database, SSH tunneling, CLI, and more
+- **Utilities** for device database, SSH tunneling, and more
+- **Command-line tools** like in EPICS - `acget`, `acput`, `acmonitor`, `acinfo`
+
+## Installation
+
+```bash
+pip install pacsys
+```
 
 ## Device API (recommended)
 
@@ -39,11 +46,12 @@ alarm = dev.analog_alarm()             # ANALOG alarm
 reading = dev.get()
 print(f"{reading.value} {reading.units}")  # e.g. "72.5 DegF"
 
+# Typed devices enforce return types
+temp = ScalarDevice("M:OUTTMP")        # read() -> float
+
 # Write with automatic readback verification
-with pacsys.dpm(auth=KerberosAuth(), role="testing") as backend:
-    dev = Device("M:OUTTMP", backend=backend)
-    result = dev.write(72.5, verify=Verify(tolerance=0.5))
-    assert result.verified
+result = dev.write(72.5, verify=Verify(tolerance=0.5))
+assert result.verified
 
 # Control commands with shortcuts
 dev.on()
@@ -162,13 +170,7 @@ acmonitor -n 10 M:OUTTMP@p,500
 acinfo -v M:OUTTMP
 ```
 
-All tools are also available as `pacsys-get`, `pacsys-put`, `pacsys-monitor`, `pacsys-info`.
-
-## Installation
-
-```bash
-pip install pacsys
-```
+Tools are aliased under `pacsys-get`, `pacsys-put`, `pacsys-monitor`, `pacsys-info`.
 
 ## Requirements
 

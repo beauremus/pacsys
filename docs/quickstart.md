@@ -91,12 +91,12 @@ PACSys automatically converts READING to SETTING and STATUS to CONTROL when writ
 
 ## Choosing a Backend
 
-| Backend | Factory | Auth | Read | Write | Stream |
-|---------|---------|------|:----:|:-----:|:------:|
-| **DPM/HTTP** | `pacsys.dpm()` | Kerberos (writes) | :material-check: | :material-check: | :material-check: |
-| **DPM/gRPC** | `pacsys.grpc()` | JWT (writes) | :material-check: | :material-check: | :material-check: |
-| **DMQ** | `pacsys.dmq()` | Kerberos (all) | :material-check: | :material-check: | :material-check: |
-| **ACL** | `pacsys.acl()` | None | :material-check: | - | - |
+| Backend | Factory | Protocol | Auth | Read | Write | Stream |
+|---------|---------|----------|------|:----:|:-----:|:------:|
+| **DPM/HTTP** | `pacsys.dpm()` | TCP + SDD | Kerberos (writes) | :material-check: | :material-check: | :material-check: |
+| **DPM/gRPC** | `pacsys.grpc()` | TCP + gRPC | JWT (writes) | :material-check: | :material-check: | :material-check: |
+| **DMQ** | `pacsys.dmq()` | TCP + AMQP + SDD | Kerberos (all) | :material-check: | :material-check: | :material-check: |
+| **ACL/HTTP** | `pacsys.acl()` | TCP + HTTP/CGI | None | :material-check: | - | - |
 
 ```python
 # Default (DPM/HTTP, implicit)
