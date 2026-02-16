@@ -97,7 +97,7 @@ The **second character** can be a property qualifier shortcut:
 | `:` | READING (default) | `M:OUTTMP` |
 | `?` | READING | `M?OUTTMP` |
 | `_` | SETTING | `M_OUTTMP` |
-| `\|` | STATUS | `M\|OUTTMP` |
+| `&#124;` | STATUS | `M&#124;OUTTMP` |
 | `&` | CONTROL | `M&OUTTMP` |
 | `@` | ANALOG alarm | `M@OUTTMP` |
 | `$` | DIGITAL alarm | `M$OUTTMP` |

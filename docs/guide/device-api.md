@@ -210,9 +210,9 @@ assert result.verified
 | `success` | `bool` | True if error_code == 0 |
 | `facility_code` | `int` | ACNET facility code |
 | `error_code` | `int` | 0 = success, <0 = error |
-| `message` | `str \| None` | Error message (if failed) |
-| `verified` | `bool \| None` | True=matched, False=failed, None=no verify |
-| `readback` | `float \| str \| bytes \| ... \| None` | Last readback value |
+| `message` | `str &#124; None` | Error message (if failed) |
+| `verified` | `bool &#124; None` | True=matched, False=failed, None=no verify |
+| `readback` | `float &#124; str &#124; bytes &#124; ... &#124; None` | Last readback value |
 | `skipped` | `bool` | True if check_first found value correct |
 | `attempts` | `int` | Number of readback attempts made |
 

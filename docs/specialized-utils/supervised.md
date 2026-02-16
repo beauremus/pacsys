@@ -60,12 +60,12 @@ SupervisedServer(backend, port=50051, host="[::]", policies=None, token=None, au
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `backend` | `Backend \| AsyncBackend` | *(required)* | Any backend instance to proxy |
+| `backend` | `Backend &#124; AsyncBackend` | *(required)* | Any backend instance to proxy |
 | `port` | `int` | `50051` | Port to listen on (use `0` for OS-assigned) |
 | `host` | `str` | `[::]` | Bind address |
 | `policies` | `list[Policy]` | `None` | Policy chain for access control |
-| `token` | `str \| None` | `None` | Bearer token for write authentication. When set, clients must pass `JWTAuth(token=...)` with this value or write (`Set`) RPCs are rejected with `UNAUTHENTICATED`. Reads are always open. |
-| `audit_log` | `AuditLog \| None` | `None` | Structured audit log instance (see [AuditLog](#auditlog)) |
+| `token` | `str &#124; None` | `None` | Bearer token for write authentication. When set, clients must pass `JWTAuth(token=...)` with this value or write (`Set`) RPCs are rejected with `UNAUTHENTICATED`. Reads are always open. |
+| `audit_log` | `AuditLog &#124; None` | `None` | Structured audit log instance (see [AuditLog](#auditlog)) |
 
 ### Lifecycle
 
@@ -201,8 +201,8 @@ policies = [SlewRatePolicy(limits={"M:*": SlewLimit(max_step=10.0, max_rate=5.0)
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `max_step` | `float \| None` | `None` | Max absolute change per write |
-| `max_rate` | `float \| None` | `None` | Max units/second |
+| `max_step` | `float &#124; None` | `None` | Max absolute change per write |
+| `max_rate` | `float &#124; None` | `None` | Max units/second |
 
 ### AuditLog
 
@@ -234,7 +234,7 @@ with SupervisedServer(backend, port=50051, audit_log=audit) as srv:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `path` | `str` | *(required)* | JSON lines file path |
-| `proto_path` | `str \| None` | `None` | Binary protobuf file path to store complete raw packets (optional) |
+| `proto_path` | `str &#124; None` | `None` | Binary protobuf file path to store complete raw packets (optional) |
 | `log_responses` | `bool` | `False` | Log outgoing responses too |
 | `flush_interval` | `int` | `1` | Flush files every N writes |
 
@@ -321,8 +321,8 @@ class BusinessHoursPolicy(Policy):
 | Field | Type | Description |
 |-------|------|-------------|
 | `allowed` | `bool` | Whether the request is allowed |
-| `reason` | `str \| None` | Required when denied |
-| `ctx` | `RequestContext \| None` | Modified context (None = no change) |
+| `reason` | `str &#124; None` | Required when denied |
+| `ctx` | `RequestContext &#124; None` | Modified context (None = no change) |
 
 **`allows_writes` property:** Override this property to return `True` if your custom policy explicitly gates write access. The server uses this to generate clearer error messages when writes are denied.
 
