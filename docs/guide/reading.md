@@ -184,7 +184,7 @@ See also [Alarm Helpers](../specialized-utils/alarms.md) for the `DigitalAlarm` 
 | `_` | SETTING | `float` / `np.ndarray` | `SCALAR` / `SCALAR_ARRAY` |
 | `.RAW` | RAW | `bytes` | `RAW` |
 | `~` | DESCRIPTION | `str` | `TEXT` |
-| `&#124;` | STATUS | `dict` | `BASIC_STATUS` |
+| `|` | STATUS | `dict` | `BASIC_STATUS` |
 | `@` | ANALOG alarm | `dict` | `ANALOG_ALARM` |
 | `$` | DIGITAL alarm | `dict` | `DIGITAL_ALARM` |
 

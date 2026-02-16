@@ -210,10 +210,10 @@ else:
 | Property | Type | Description |
 |----------|------|-------------|
 | `limit_type` | `LimitType` | `MIN_MAX` or `NOM_TOL` (read-only useful; see above) |
-| `minimum` | `float&#124;None` | Minimum in engineering units |
-| `maximum` | `float&#124;None` | Maximum in engineering units |
-| `value1` | `int&#124;float` | Raw value 1 (min or nominal, primary units) |
-| `value2` | `int&#124;float` | Raw value 2 (max or tolerance, primary units) |
+| `minimum` | `float` or `None` | Minimum in engineering units |
+| `maximum` | `float` or `None` | Maximum in engineering units |
+| `value1` | `int` or `float` | Raw value 1 (min or nominal, primary units) |
+| `value2` | `int` or `float` | Raw value 2 (max or tolerance, primary units) |
 | `is_high` | `bool` | Reading exceeds high limit |
 | `is_low` | `bool` | Reading below low limit |
 | `data_type` | `DataType` | Value type (signed/unsigned/float) |

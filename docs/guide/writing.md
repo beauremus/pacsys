@@ -157,7 +157,7 @@ When writing, PACSys automatically converts read properties to their writable co
 | `Z:ACLTST.READING` | `Z:ACLTST.SETTING@N` | READING → SETTING |
 | `Z_ACLTST` | `Z:ACLTST.SETTING@N` | `_` qualifier = SETTING |
 | `Z:ACLTST@p,1000` | `Z:ACLTST.SETTING@N` | Event replaced with @N |
-| `Z&#124;ACLTST` | `Z:ACLTST.CONTROL@N` | STATUS → CONTROL |
+| `Z|ACLTST` | `Z:ACLTST.CONTROL@N` | `|` qualifier = STATUS → CONTROL |
 | `Z&ACLTST` | `Z:ACLTST.CONTROL@N` | `&` qualifier = CONTROL |
 | `Z@ACLTST.MAX` | `Z:ACLTST.ANALOG.MAX@N` | ANALOG alarm field |
 
