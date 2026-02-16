@@ -22,6 +22,7 @@ from pacsys.types import Reading, ValueType
 from pacsys.errors import DeviceError, AuthenticationError, ReadError
 from pacsys.acnet.errors import make_error
 from pacsys.dpm_protocol import ListStatus_reply, Raw_reply, StartList_reply
+from tests.test_dpm_http_auth import create_mock_kerberos_auth
 
 # Shared test helpers
 from tests.devices import (
@@ -38,15 +39,6 @@ from tests.devices import (
     TEMP_VALUE,
     TIMESTAMP_MILLIS,
 )
-
-
-class _FakeKerberosAuth:
-    def __init__(self, principal: str):
-        self._principal = principal
-
-    @property
-    def principal(self) -> str:
-        return self._principal
 
 
 # =============================================================================
@@ -86,6 +78,7 @@ class TestSingleDeviceRead:
     def test_read_scalar_success(self):
         """Successful scalar read."""
         replies = [
+            make_add_to_list_reply(ref_id=1, status=0),
             make_device_info(units="degF"),
             make_start_list(),
             make_scalar_reply(),
@@ -103,6 +96,7 @@ class TestSingleDeviceRead:
     def test_get_returns_reading(self):
         """get() returns a Reading object."""
         replies = [
+            make_add_to_list_reply(ref_id=1, status=0),
             make_device_info(units="degF"),
             make_start_list(),
             make_scalar_reply(),
@@ -171,6 +165,8 @@ class TestMultipleDeviceRead:
     def test_get_many_multiple_devices(self):
         """Reading multiple devices."""
         replies = [
+            make_add_to_list_reply(ref_id=1, status=0),
+            make_add_to_list_reply(ref_id=2, status=0),
             make_device_info(name="M:OUTTMP", ref_id=1),
             make_device_info(name="G:AMANDA", ref_id=2, di=12346),
             make_start_list(),
@@ -192,6 +188,8 @@ class TestMultipleDeviceRead:
     def test_get_many_partial_failure(self):
         """Partial failures are returned as error readings."""
         replies = [
+            make_add_to_list_reply(ref_id=1, status=0),
+            make_add_to_list_reply(ref_id=2, status=0),
             make_device_info(ref_id=1),
             make_start_list(),
             make_scalar_reply(ref_id=1),
@@ -223,6 +221,9 @@ class TestBatchEdgeCases:
     def test_get_many_duplicate_drfs(self):
         """get_many() handles same device requested multiple times."""
         replies = [
+            make_add_to_list_reply(ref_id=1, status=0),
+            make_add_to_list_reply(ref_id=2, status=0),
+            make_add_to_list_reply(ref_id=3, status=0),
             make_device_info(name="M:OUTTMP", ref_id=1),
             make_device_info(name="G:AMANDA", ref_id=2, di=12346),
             make_device_info(name="M:OUTTMP", ref_id=3),
@@ -248,6 +249,9 @@ class TestBatchEdgeCases:
         """get_many() returns readings in same order as request."""
         # Replies come back in different order (B, C, A)
         replies = [
+            make_add_to_list_reply(ref_id=1, status=0),
+            make_add_to_list_reply(ref_id=2, status=0),
+            make_add_to_list_reply(ref_id=3, status=0),
             make_device_info(name="C:DEV", ref_id=1, di=12347),
             make_device_info(name="A:DEV", ref_id=2, di=12345),
             make_device_info(name="B:DEV", ref_id=3, di=12346),
@@ -309,6 +313,9 @@ class TestBatchEdgeCases:
     def test_get_many_mixed_types(self):
         """get_many() handles mixed value types in one batch."""
         replies = [
+            make_add_to_list_reply(ref_id=1, status=0),
+            make_add_to_list_reply(ref_id=2, status=0),
+            make_add_to_list_reply(ref_id=3, status=0),
             make_device_info(name="M:OUTTMP", ref_id=1, description="Scalar device"),
             make_device_info(name="B:HS23T", ref_id=2, di=12346, description="Array device"),
             make_device_info(name="M:DESC", ref_id=3, di=12347, description="Text device"),
@@ -341,6 +348,8 @@ class TestBatchEdgeCases:
         num_devices = 10
         replies = []
         for i in range(num_devices):
+            replies.append(make_add_to_list_reply(ref_id=i + 1, status=0))
+        for i in range(num_devices):
             replies.append(make_device_info(name=f"D:DEV{i:02d}", ref_id=i + 1, di=12345 + i))
         replies.append(make_start_list())
         for i in range(num_devices):
@@ -372,6 +381,7 @@ class TestReplyTypes:
     def test_scalar_array_reply(self):
         """ScalarArray_reply handling."""
         replies = [
+            make_add_to_list_reply(ref_id=1, status=0),
             make_start_list(),
             make_scalar_array_reply(values=[1.0, 2.0, 3.0, 4.0, 5.0]),
         ]
@@ -388,7 +398,7 @@ class TestReplyTypes:
 
     def test_text_reply(self):
         """Text_reply handling."""
-        replies = [make_start_list(), make_text_reply(text="Hello, ACNET!")]
+        replies = [make_add_to_list_reply(ref_id=1, status=0), make_start_list(), make_text_reply(text="Hello, ACNET!")]
         mock_socket = MockSocketWithReplies(list_id=1, replies=replies)
 
         with mock.patch("socket.socket", return_value=mock_socket):
@@ -413,7 +423,8 @@ class TestReplyTypes:
         raw_reply.status = 0
         raw_reply.data = b"\x01\x02\x03\x04"
 
-        mock_socket = MockSocketWithReplies(list_id=1, replies=[start_reply, raw_reply])
+        add_reply = make_add_to_list_reply(ref_id=1, status=0)
+        mock_socket = MockSocketWithReplies(list_id=1, replies=[add_reply, start_reply, raw_reply])
 
         with mock.patch("socket.socket", return_value=mock_socket):
             backend = DPMHTTPBackend()
@@ -525,7 +536,7 @@ class TestWriteConnectionAuthContext:
         backend = DPMHTTPBackend()
         acquired = None
         try:
-            backend._auth = _FakeKerberosAuth("new-user@FNAL.GOV")
+            backend._auth = create_mock_kerberos_auth("new-user@FNAL.GOV")
 
             stale_wc = MagicMock()
             stale_wc.is_stale.return_value = False

@@ -4,45 +4,47 @@ from unittest import mock
 
 import pytest
 
-from pacsys.types import WriteResult, BasicControl
+from pacsys.testing import AsyncFakeBackend
+from pacsys.types import BasicControl
 from pacsys.aio._device import AsyncDevice
 
 
 class TestAsyncDeviceRead:
     @pytest.mark.asyncio
     async def test_read(self):
-        backend = mock.AsyncMock()
-        backend.read = mock.AsyncMock(return_value=72.5)
+        fb = AsyncFakeBackend()
+        fb.set_reading("M:OUTTMP.READING", 72.5)
 
-        device = AsyncDevice("M:OUTTMP", backend=backend)
+        device = AsyncDevice("M:OUTTMP", backend=fb)
         val = await device.read()
         assert val == 72.5
-        backend.read.assert_awaited_once()
+        assert fb.was_read("M:OUTTMP.READING")
 
     @pytest.mark.asyncio
     async def test_setting(self):
-        backend = mock.AsyncMock()
-        backend.read = mock.AsyncMock(return_value=50.0)
+        fb = AsyncFakeBackend()
+        fb.set_reading("M:OUTTMP.SETTING", 50.0)
 
-        device = AsyncDevice("M:OUTTMP", backend=backend)
+        device = AsyncDevice("M:OUTTMP", backend=fb)
         val = await device.setting()
         assert val == 50.0
+        assert fb.was_read("M:OUTTMP.SETTING")
 
     @pytest.mark.asyncio
     async def test_status_bool(self):
-        backend = mock.AsyncMock()
-        backend.read = mock.AsyncMock(return_value=1)
+        fb = AsyncFakeBackend()
+        fb.set_reading("M:OUTTMP.STATUS.ON", 1)
 
-        device = AsyncDevice("M:OUTTMP", backend=backend)
+        device = AsyncDevice("M:OUTTMP", backend=fb)
         val = await device.status(field="on")
         assert val is True
 
     @pytest.mark.asyncio
     async def test_status_raw(self):
-        backend = mock.AsyncMock()
-        backend.read = mock.AsyncMock(return_value=0xFF)
+        fb = AsyncFakeBackend()
+        fb.set_reading("M:OUTTMP.STATUS.RAW", 0xFF)
 
-        device = AsyncDevice("M:OUTTMP", backend=backend)
+        device = AsyncDevice("M:OUTTMP", backend=fb)
         val = await device.status(field="raw")
         assert val == 0xFF
 
@@ -50,39 +52,39 @@ class TestAsyncDeviceRead:
 class TestAsyncDeviceWrite:
     @pytest.mark.asyncio
     async def test_write(self):
-        backend = mock.AsyncMock()
-        backend.write = mock.AsyncMock(return_value=WriteResult(drf="M:OUTTMP.SETTING@N"))
+        fb = AsyncFakeBackend()
+        fb.set_reading("M:OUTTMP.SETTING", 72.5)
 
-        device = AsyncDevice("M:OUTTMP", backend=backend)
+        device = AsyncDevice("M:OUTTMP", backend=fb)
         result = await device.write(72.5)
         assert result.success
-        backend.write.assert_awaited_once()
+        assert fb.was_written("M:OUTTMP.SETTING")
 
     @pytest.mark.asyncio
     async def test_write_with_verify(self):
         from pacsys.verify import Verify
 
-        backend = mock.AsyncMock()
-        backend.write = mock.AsyncMock(return_value=WriteResult(drf="M:OUTTMP.SETTING@N"))
-        backend.read = mock.AsyncMock(return_value=72.5)
+        fb = AsyncFakeBackend()
+        fb.set_reading("M:OUTTMP.SETTING", 72.5)
+        fb.set_reading("M:OUTTMP.READING", 72.5)
 
-        device = AsyncDevice("M:OUTTMP", backend=backend)
+        device = AsyncDevice("M:OUTTMP", backend=fb)
         v = Verify(initial_delay=0.0, retry_delay=0.0)
         result = await device.write(72.5, verify=v)
         assert result.verified
 
     @pytest.mark.asyncio
     async def test_control_on(self):
-        backend = mock.AsyncMock()
-        backend.write = mock.AsyncMock(return_value=WriteResult(drf="M:OUTTMP.CONTROL@N"))
+        fb = AsyncFakeBackend()
+        fb.set_reading("M:OUTTMP.CONTROL", 0)
 
-        device = AsyncDevice("M:OUTTMP", backend=backend)
+        device = AsyncDevice("M:OUTTMP", backend=fb)
         result = await device.on()
         assert result.success
-        # Should have written to CONTROL property
-        call_args = backend.write.call_args
-        assert ".CONTROL@N" in call_args[0][0]
-        assert call_args[0][1] == BasicControl.ON
+        assert fb.was_written("M:OUTTMP.CONTROL")
+        # Verify the command value was BasicControl.ON
+        _, written_value = fb.writes[-1]
+        assert written_value == BasicControl.ON
 
 
 class TestAsyncDeviceFluent:

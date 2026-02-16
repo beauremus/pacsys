@@ -18,6 +18,7 @@ from pacsys.ssh import (
     Tunnel,
     _normalize_hops,
 )
+from tests.ssh_helpers import make_exec_channel
 
 # pacsys.__init__ defines a function named 'ssh' that shadows the pacsys.ssh
 # module. On Python <=3.12, patch("pacsys.ssh.X") resolves via getattr and
@@ -148,7 +149,7 @@ class TestSSHClientInit:
 
     def test_gssapi_import_check(self):
         """If gssapi is importable, init should succeed for gssapi hops."""
-        # gssapi is installed in test env, so this should not raise
+        pytest.importorskip("gssapi")
         ssh = SSHClient(SSHHop("host.example.com", auth_method="gssapi"))
         assert len(ssh.hops) == 1
 
@@ -248,48 +249,6 @@ class TestSSHClientConnect:
 # ---------------------------------------------------------------------------
 
 
-def _make_exec_channel(stdout=b"", stderr=b"", exit_code=0):
-    """Create a mock channel that simulates command execution.
-
-    Returns data on first recv_ready check, then signals exit.
-    """
-    chan = MagicMock()
-    chan.status_event = threading.Event()
-    chan.status_event.set()
-
-    stdout_returned = [False]
-    stderr_returned = [False]
-
-    def recv_ready():
-        if not stdout_returned[0] and stdout:
-            return True
-        return False
-
-    def recv(size):
-        stdout_returned[0] = True
-        return stdout
-
-    def recv_stderr_ready():
-        if not stderr_returned[0] and stderr:
-            return True
-        return False
-
-    def recv_stderr(size):
-        stderr_returned[0] = True
-        return stderr
-
-    def exit_status_ready():
-        return stdout_returned[0] or not stdout
-
-    chan.recv_ready = MagicMock(side_effect=lambda: recv_ready())
-    chan.recv = MagicMock(side_effect=lambda size: recv(size))
-    chan.recv_stderr_ready = MagicMock(side_effect=lambda: recv_stderr_ready())
-    chan.recv_stderr = MagicMock(side_effect=lambda size: recv_stderr(size))
-    chan.exit_status_ready = MagicMock(side_effect=lambda: exit_status_ready())
-    chan.recv_exit_status.return_value = exit_code
-    return chan
-
-
 class TestSSHClientExec:
     @patch("paramiko.Transport")
     @patch("socket.create_connection")
@@ -298,7 +257,7 @@ class TestSSHClientExec:
         mock_transport = _make_mock_transport()
         mock_transport_cls.return_value = mock_transport
 
-        chan = _make_exec_channel(stdout=b"hello world\n", exit_code=0)
+        chan = make_exec_channel(stdout=b"hello world\n", exit_code=0)
         mock_transport.open_session.return_value = chan
 
         ssh = SSHClient(SSHHop("host", auth_method="password", password="pw"))
@@ -318,7 +277,7 @@ class TestSSHClientExec:
         mock_transport = _make_mock_transport()
         mock_transport_cls.return_value = mock_transport
 
-        chan = _make_exec_channel(exit_code=0)
+        chan = make_exec_channel(exit_code=0)
         mock_transport.open_session.return_value = chan
 
         ssh = SSHClient(SSHHop("host", auth_method="password", password="pw"))
@@ -458,8 +417,8 @@ class TestSSHClientExecMany:
         mock_transport_cls.return_value = mock_transport
 
         mock_transport.open_session.side_effect = [
-            _make_exec_channel(exit_code=0),
-            _make_exec_channel(exit_code=0),
+            make_exec_channel(exit_code=0),
+            make_exec_channel(exit_code=0),
         ]
 
         ssh = SSHClient(SSHHop("host", auth_method="password", password="pw"))

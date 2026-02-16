@@ -705,9 +705,9 @@ def make_read_sequence(
 ) -> list:
     """Create the standard reply sequence for a successful DPM read.
 
-    Returns: [DeviceInfo_reply (optional), StartList_reply, Scalar_reply]
+    Returns: [AddToList_reply, DeviceInfo_reply (optional), StartList_reply, Scalar_reply]
     """
-    replies = []
+    replies = [make_add_to_list_reply(ref_id=ref_id, status=0)]
     if with_device_info:
         replies.append(make_device_info(name=device, ref_id=ref_id))
     replies.append(make_start_list())

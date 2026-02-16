@@ -292,6 +292,10 @@ FTP_DEVICE = "M:OUTTMP@p,100H<-FTP"
 # 1 hour window: 2025-01-15 12:00–13:00 UTC (epoch ms)
 LOGGER_DEVICE = "M:OUTTMP<-LOGGER:1736942400000:1736946000000"
 LOGGER_DEVICE_WITH_EVENT = "M:OUTTMP@P,1000,true<-LOGGER:1736942400000:1736946000000"
+# Explicit logger node: 4th colon-delimited param selects specific logger
+# (DPM auto-selects best logger when omitted; see LoggerConfigCache.bestLoggers)
+LOGGER_DEVICE_EXPLICIT_NODE = "M:OUTTMP<-LOGGER:1736942400000:1736946000000:ArkIv"
+LOGGER_DEVICE_BAD_NODE = "M:OUTTMP<-LOGGER:1736942400000:1736946000000:BOGUSLOGGER99"
 
 # =============================================================================
 # Alarm Value Transformations

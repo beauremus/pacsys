@@ -27,6 +27,8 @@ from .devices import (
     DEVICE_TYPES,
     FTP_DEVICE,
     LOGGER_DEVICE,
+    LOGGER_DEVICE_BAD_NODE,
+    LOGGER_DEVICE_EXPLICIT_NODE,
     LOGGER_DEVICE_WITH_EVENT,
     NONEXISTENT_DEVICE,
     NOPROP_DEVICE,
@@ -622,6 +624,23 @@ class TestBackendLogger:
         span_s = (micros[-1] - micros[0]) / 1_000_000
         avg_spacing_s = span_s / (len(micros) - 1)
         assert 0.5 < avg_spacing_s < 2.0, f"Expected ~1s spacing, got {avg_spacing_s:.1f}s"
+
+    def test_get_logger_explicit_node(self, read_backend: Backend):
+        """get() with <-LOGGER:t1:t2:ArkIv selects a specific logger node."""
+        _skip_if_not_dpm(read_backend)
+        reading = read_backend.get(LOGGER_DEVICE_EXPLICIT_NODE, timeout=30.0)
+        self._assert_logger_reading(reading, LOGGER_DEVICE_EXPLICIT_NODE)
+
+    def test_get_logger_bad_node_fails(self, read_backend: Backend):
+        """get() with a bogus logger name proves DPM parses the 4th param."""
+        _skip_if_not_dpm(read_backend)
+        # Bogus logger either errors out or returns empty data (never ~3600 pts)
+        try:
+            reading = read_backend.get(LOGGER_DEVICE_BAD_NODE, timeout=30.0)
+        except Exception:
+            return  # DPM HTTP times out — error proves param was parsed
+        ok_with_data = reading.ok and len(reading.value.get("data", [])) > 0
+        assert not ok_with_data, f"Bogus logger should not return data, got {reading}"
 
 
 # =============================================================================
