@@ -10,7 +10,7 @@ nav:
     - Reading: guide/reading.md
     - Writing: guide/writing.md
     - Streaming: guide/streaming.md
-    - Device Status: guide/status.md
+    - Status and Control: guide/status.md
     - Device API: guide/device-api.md
     - SSH: guide/ssh.md
   - DRF Format: drf.md
@@ -32,6 +32,9 @@ nav:
 
 theme:
   name: material
+  font:
+    text: Inter
+    code: JetBrains Mono
   icon:
     repo: fontawesome/brands/github
   features:
@@ -41,6 +44,7 @@ theme:
     - navigation.sections
     - navigation.instant
     - navigation.instant.prefetch
+    - navigation.footer
     - content.code.copy
     - content.code.annotate
     - toc.follow
@@ -51,15 +55,15 @@ theme:
         name: Switch to light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: indigo
-      accent: indigo
+      primary: teal
+      accent: deep orange
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: indigo
-      accent: indigo
+      primary: teal
+      accent: deep orange
       toggle:
         icon: material/brightness-4
         name: Switch to system preference

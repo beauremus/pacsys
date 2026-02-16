@@ -1,4 +1,4 @@
-# Device Status and Control
+# Status and Control
 
 ACNET devices have digital status bits (on/off, ready/tripped, polarity, etc.) and accept control commands to change their state.
 

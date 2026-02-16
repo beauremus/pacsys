@@ -24,22 +24,43 @@ pip install -e ".[dev]"
 
 ## Read a Device
 
-```python
-import pacsys
+=== "Sync"
 
-# Simple value
-temperature = pacsys.read("M:OUTTMP")
-print(f"Temperature: {temperature}")
+    ```python
+    import pacsys
 
-# With metadata
-reading = pacsys.get("M:OUTTMP")
-print(f"{reading.value} {reading.units}")  # e.g. "72.5 DegF"
+    # Simple value
+    temperature = pacsys.read("M:OUTTMP")
+    print(f"Temperature: {temperature}")
 
-# Multiple devices at once
-readings = pacsys.get_many(["M:OUTTMP", "G:AMANDA"])
-for r in readings:
-    print(f"{r.name}: {r.value}")
-```
+    # With metadata
+    reading = pacsys.get("M:OUTTMP")
+    print(f"{reading.value} {reading.units}")  # e.g. "72.5 DegF"
+
+    # Multiple devices at once
+    readings = pacsys.get_many(["M:OUTTMP", "G:AMANDA"])
+    for r in readings:
+        print(f"{r.name}: {r.value}")
+    ```
+
+=== "Async"
+
+    ```python
+    import pacsys.aio as pacsys
+
+    # Simple value
+    temperature = await pacsys.read("M:OUTTMP")
+    print(f"Temperature: {temperature}")
+
+    # With metadata
+    reading = await pacsys.get("M:OUTTMP")
+    print(f"{reading.value} {reading.units}")  # e.g. "72.5 DegF"
+
+    # Multiple devices at once
+    readings = await pacsys.get_many(["M:OUTTMP", "G:AMANDA"])
+    for r in readings:
+        print(f"{r.name}: {r.value}")
+    ```
 
 `read()` raises `DeviceError` on failure. `get()` returns a `Reading` object you can inspect with `reading.is_error`.
 
@@ -49,24 +70,55 @@ for r in readings:
 
 ## Stream Data
 
-```python
-with pacsys.subscribe(["M:OUTTMP@p,1000"]) as stream:
-    for reading, handle in stream.readings(timeout=30):
+=== "Sync"
+
+    ```python
+    import pacsys
+
+    with pacsys.subscribe(["M:OUTTMP@p,1000"]) as stream:
+        for reading, handle in stream.readings(timeout=30):
+            print(f"{reading.name}: {reading.value}")
+            if reading.value > 100:
+                stream.stop()
+    ```
+
+=== "Async"
+
+    ```python
+    import pacsys.aio as pacsys
+
+    stream = await pacsys.subscribe(["M:OUTTMP@p,1000"])
+    async for reading, handle in stream.readings(timeout=30):
         print(f"{reading.name}: {reading.value}")
         if reading.value > 100:
-            stream.stop() # will stop iterating on next loop
-```
+            handle.stop()
+    ```
 
 The `@p,1000` means "send data every 1000 milliseconds". For streaming, a repeating event type must be specified.
 
 Or use the Device API:
 
-```python
-dev = pacsys.Device("M:OUTTMP@p,1000")
-with dev.subscribe() as stream:
-    for reading, _ in stream.readings(timeout=30):
+=== "Sync"
+
+    ```python
+    import pacsys
+
+    dev = pacsys.Device("M:OUTTMP@p,1000")
+    with dev.subscribe() as stream:
+        for reading, _ in stream.readings(timeout=30):
+            print(reading.value)
+    ```
+
+=== "Async"
+
+    ```python
+    from pacsys.aio import Device
+
+    dev = Device("M:OUTTMP@p,1000")
+    stream = await dev.subscribe()
+    async for reading, _ in stream.readings(timeout=30):
         print(reading.value)
-```
+    ```
 
 :material-arrow-right: [Streaming Guide](guide/streaming.md) - callbacks, CombinedStream, error handling
 
@@ -74,14 +126,32 @@ with dev.subscribe() as stream:
 
 ## Write a Value
 
-```python
-auth = pacsys.KerberosAuth()  # requires kinit beforehand
+=== "Sync"
 
-with pacsys.dpm(auth=auth, role="testing") as backend:
-    result = backend.write("Z:ACLTST", 45.0)
-    if result.success:
-        print("Write successful")
-```
+    ```python
+    import pacsys
+
+    auth = pacsys.KerberosAuth()  # requires kinit beforehand
+
+    with pacsys.dpm(auth=auth, role="testing") as backend:
+        result = backend.write("Z:ACLTST", 45.0)
+        if result.success:
+            print("Write successful")
+    ```
+
+=== "Async"
+
+    ```python
+    from pacsys import KerberosAuth
+    import pacsys.aio as aio
+
+    auth = KerberosAuth()  # requires kinit beforehand
+
+    async with aio.dpm(auth=auth, role="testing") as backend:
+        result = await backend.write("Z:ACLTST", 45.0)
+        if result.success:
+            print("Write successful")
+    ```
 
 PACSys automatically converts READING to SETTING and STATUS to CONTROL when writing.
 
