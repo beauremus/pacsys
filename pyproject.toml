@@ -60,6 +60,8 @@ dev = [
   "ruff",
   "ty",
   "pre-commit",
+  "build",
+  "twine",
   "types-grpcio",
   "types-pika-ts",
   "types-protobuf",
