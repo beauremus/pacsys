@@ -5,7 +5,7 @@ The `SupervisedServer` is a DPM/gRPC server that wraps any Backend, forwarding r
 ## Overview
 
 ```
-[gRPC Client] ──DAQ stub──> [SupervisedServer] ──Backend API──> [Any Backend]
+[gRPC Client] ──DAQ stub──> [SupervisedServer] ──Backend API──> [Any Backend] ──> [ACNET]
                                    │
                               policies + logging
 ```

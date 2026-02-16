@@ -3,9 +3,11 @@
 import asyncio
 from unittest import mock
 
+import numpy as np
 import pytest
 
 from pacsys.errors import AuthenticationError, ReadError
+from pacsys.types import ValueType
 
 from pacsys.dpm_protocol import (
     AddToList_reply,
@@ -15,6 +17,7 @@ from pacsys.dpm_protocol import (
     SettingStatus_struct,
     StartList_reply,
     Status_reply,
+    TimedScalarArray_reply,
     ApplySettings_reply,
 )
 from pacsys.backends._dpm_core import _AsyncDpmCore
@@ -306,3 +309,125 @@ class TestEnableSettings:
         core, conn = make_core([])
         with pytest.raises(AuthenticationError, match="Must authenticate"):
             await core.enable_settings()
+
+
+def _timed_scalar_array(ref_id, data, micros, timestamp=1000):
+    r = TimedScalarArray_reply()
+    r.ref_id = ref_id
+    r.data = list(data)
+    r.micros = list(micros)
+    r.timestamp = timestamp
+    r.cycle = 0
+    r.status = 0
+    return r
+
+
+def _empty_timed_scalar_array(ref_id):
+    r = TimedScalarArray_reply()
+    r.ref_id = ref_id
+    r.data = []
+    r.micros = []
+    r.timestamp = 0
+    r.cycle = 0
+    r.status = 0
+    return r
+
+
+LOGGER_DRF = "M:OUTTMP<-LOGGER:1736942400000:1736946000000"
+
+
+class TestLoggerRead:
+    @pytest.mark.asyncio
+    async def test_logger_accumulates_chunks(self, make_core):
+        """Two data chunks + empty terminator -> merged TIMED_SCALAR_ARRAY."""
+        chunk1 = _timed_scalar_array(1, [1.0, 2.0, 3.0], [100, 200, 300], timestamp=1000)
+        chunk2 = _timed_scalar_array(1, [4.0, 5.0], [400, 500], timestamp=2000)
+        terminator = _empty_timed_scalar_array(1)
+        replies = [_add_ok(1), _device_info(1), _start_ok(), chunk1, chunk2, terminator]
+        core, conn = make_core(replies)
+
+        readings = await core.read_many([LOGGER_DRF], timeout=2.0)
+
+        assert len(readings) == 1
+        r = readings[0]
+        assert r.ok
+        assert r.value_type == ValueType.TIMED_SCALAR_ARRAY
+        assert isinstance(r.value, dict)
+        np.testing.assert_array_equal(r.value["data"], [1.0, 2.0, 3.0, 4.0, 5.0])
+        np.testing.assert_array_equal(r.value["micros"], [100, 200, 300, 400, 500])
+
+    @pytest.mark.asyncio
+    async def test_logger_empty_window(self, make_core):
+        """Only empty terminator -> empty arrays (valid empty time window)."""
+        terminator = _empty_timed_scalar_array(1)
+        replies = [_add_ok(1), _device_info(1), _start_ok(), terminator]
+        core, conn = make_core(replies)
+
+        readings = await core.read_many([LOGGER_DRF], timeout=2.0)
+
+        assert len(readings) == 1
+        r = readings[0]
+        assert r.ok
+        assert r.value_type == ValueType.TIMED_SCALAR_ARRAY
+        assert len(r.value["data"]) == 0
+        assert len(r.value["micros"]) == 0
+
+    @pytest.mark.asyncio
+    async def test_logger_mixed_with_normal_read(self, make_core):
+        """Logger DRF + normal DRF in same batch both return correctly."""
+        chunk1 = _timed_scalar_array(1, [10.0, 20.0], [100, 200])
+        terminator = _empty_timed_scalar_array(1)
+        normal_reply = _scalar_reply(2, 72.5)
+        replies = [
+            _add_ok(1),
+            _add_ok(2),
+            _device_info(1),
+            _device_info(2),
+            _start_ok(),
+            chunk1,
+            terminator,
+            normal_reply,
+        ]
+        core, conn = make_core(replies)
+
+        readings = await core.read_many([LOGGER_DRF, "M:OUTTMP"], timeout=2.0)
+
+        assert len(readings) == 2
+        # Logger reading
+        assert readings[0].value_type == ValueType.TIMED_SCALAR_ARRAY
+        np.testing.assert_array_equal(readings[0].value["data"], [10.0, 20.0])
+        # Normal reading
+        assert readings[1].value == 72.5
+
+    @pytest.mark.asyncio
+    async def test_logger_status_reply_error(self, make_core):
+        """Status_reply error for a logger DRF surfaces as a proper ACNET error."""
+        error_status = Status_reply()
+        error_status.ref_id = 1
+        error_status.status = 0xBB06
+        replies = [_add_ok(1), _device_info(1), _start_ok(), error_status]
+        core, conn = make_core(replies)
+
+        readings = await core.read_many([LOGGER_DRF], timeout=2.0)
+
+        assert len(readings) == 1
+        assert readings[0].is_error
+        assert readings[0].error_code != 0
+
+    @pytest.mark.asyncio
+    async def test_logger_error_terminator(self, make_core):
+        """Empty terminator with nonzero status surfaces as error, not empty success."""
+        error_term = TimedScalarArray_reply()
+        error_term.ref_id = 1
+        error_term.data = []
+        error_term.micros = []
+        error_term.timestamp = 0
+        error_term.cycle = 0
+        error_term.status = 0xBB06
+        replies = [_add_ok(1), _device_info(1), _start_ok(), error_term]
+        core, conn = make_core(replies)
+
+        readings = await core.read_many([LOGGER_DRF], timeout=2.0)
+
+        assert len(readings) == 1
+        assert readings[0].is_error

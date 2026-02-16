@@ -38,18 +38,22 @@ from pacsys.dpm_protocol import (
     EnableSettings_request,
     ListStatus_reply,
     RawSetting_struct,
+    ScalarArray_reply,
     ScaledSetting_struct,
     StartList_reply,
     StartList_request,
     Status_reply,
     StopList_request,
     TextSetting_struct,
+    TimedScalarArray_reply,
 )
 
 # Reuse pure helpers from sync backend
 from pacsys.backends.dpm_http import (
     _reply_to_reading,
     _device_info_to_meta,
+    _is_logger_drf,
+    _aggregate_logger_chunks,
     _AsyncDPMConnection,
 )
 
@@ -241,8 +245,16 @@ class _AsyncDpmCore:
         prepared_drfs = [ensure_immediate_event(drf) for drf in drfs]
         list_id = self._conn.list_id
 
+        # Logger DRFs arrive in 487-point chunks with a final empty chunk.
+        logger_refs: set[int] = set()
+        for i, drf in enumerate(prepared_drfs):
+            if _is_logger_drf(drf):
+                logger_refs.add(i + 1)
+
         device_infos: dict[int, DeviceInfo_reply] = {}
         data_replies: dict[int, object] = {}
+        logger_chunks: dict[int, list] = {}
+        logger_complete: set[int] = set()
         add_errors: dict[int, AddToList_reply] = {}
         received_count = 0
         expected_count = len(drfs)
@@ -288,12 +300,31 @@ class _AsyncDpmCore:
                 elif isinstance(reply, ListStatus_reply):
                     pass
                 elif isinstance(reply, Status_reply):
-                    if reply.ref_id not in data_replies:
-                        data_replies[reply.ref_id] = reply
+                    ref_id = reply.ref_id
+                    if ref_id in logger_refs:
+                        # Error for a logger DRF — record as an error chunk
+                        logger_chunks.setdefault(ref_id, []).append(reply)
+                        logger_complete.add(ref_id)
+                        received_count += 1
+                    elif ref_id not in data_replies:
+                        data_replies[ref_id] = reply
                         received_count += 1
                 elif hasattr(reply, "ref_id"):
-                    if reply.ref_id not in data_replies:
-                        data_replies[reply.ref_id] = reply
+                    ref_id = reply.ref_id
+                    if ref_id in logger_refs:
+                        is_empty = (
+                            isinstance(reply, (TimedScalarArray_reply, ScalarArray_reply)) and len(reply.data) == 0
+                        )
+                        if is_empty:
+                            if hasattr(reply, "status") and reply.status != 0:
+                                # Error terminator — accumulate so _aggregate_logger_chunks surfaces the error
+                                logger_chunks.setdefault(ref_id, []).append(reply)
+                            logger_complete.add(ref_id)
+                            received_count += 1
+                        else:
+                            logger_chunks.setdefault(ref_id, []).append(reply)
+                    elif ref_id not in data_replies:
+                        data_replies[ref_id] = reply
                         received_count += 1
         except (BrokenPipeError, ConnectionResetError, OSError, asyncio.IncompleteReadError, DPMConnectionError) as e:
             conn_broken = True
@@ -317,6 +348,7 @@ class _AsyncDpmCore:
             ref_id = i + 1
             info = device_infos.get(ref_id)
             reply = data_replies.get(ref_id)
+            chunks = logger_chunks.get(ref_id)
             add_err = add_errors.get(ref_id)
             meta = _device_info_to_meta(info) if info else None
 
@@ -335,6 +367,40 @@ class _AsyncDpmCore:
                         meta=meta,
                     )
                 )
+            elif ref_id in logger_refs:
+                if ref_id in logger_complete and chunks:
+                    readings.append(_aggregate_logger_chunks(chunks, original_drf, meta))
+                elif ref_id in logger_complete:
+                    readings.append(
+                        Reading(
+                            drf=original_drf,
+                            value_type=ValueType.TIMED_SCALAR_ARRAY,
+                            value={"data": np.array([], dtype=float), "micros": np.array([], dtype=np.int64)},
+                            timestamp=None,
+                            meta=meta,
+                        )
+                    )
+                else:
+                    has_timeout = True
+                    ec = ERR_RETRY if transport_error is not None else ERR_TIMEOUT
+                    msg = (
+                        f"Connection error: {transport_error}"
+                        if transport_error is not None
+                        else "Logger response incomplete"
+                    )
+                    readings.append(
+                        Reading(
+                            drf=original_drf,
+                            value_type=ValueType.SCALAR,
+                            facility_code=FACILITY_ACNET,
+                            error_code=ec,
+                            value=None,
+                            message=msg,
+                            timestamp=None,
+                            cycle=0,
+                            meta=meta,
+                        )
+                    )
             elif reply is None:
                 has_timeout = True
                 ec = ERR_RETRY if transport_error is not None else ERR_TIMEOUT
