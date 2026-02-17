@@ -423,6 +423,8 @@ class DPMConnection:
             return reply
 
         except socket.timeout:
+            self._connected = False
+            self._recv_buffer.clear()
             raise TimeoutError("Receive timeout")
         except socket.error as e:
             self._connected = False
@@ -455,12 +457,13 @@ class DPMConnection:
         while len(self._recv_buffer) < n:
             chunk = self._socket.recv(4096)
             if not chunk:
+                self._connected = False
                 raise DPMConnectionError("Connection closed by server")
             self._recv_buffer.extend(chunk)
 
         # Extract requested bytes and keep remainder in buffer
         data = bytes(self._recv_buffer[:n])
-        self._recv_buffer = self._recv_buffer[n:]
+        del self._recv_buffer[:n]
         return data
 
     def _unmarshal_reply(self, data: bytes) -> object:

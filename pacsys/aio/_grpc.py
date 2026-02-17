@@ -38,8 +38,8 @@ class AsyncGRPCBackend(AsyncBackend):
     ):
         if not GRPC_AVAILABLE:
             raise ImportError("grpc package not available")
-        self._host = host or "localhost"
-        self._port = port or 23456
+        self._host = host if host is not None else "localhost"
+        self._port = port if port is not None else 23456
         self._auth = auth
         self._timeout = timeout
         self._core: Optional[_DaqCore] = None

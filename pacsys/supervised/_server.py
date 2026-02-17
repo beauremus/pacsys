@@ -37,16 +37,17 @@ def _reorder_map(original: list[str], modified: list[str]) -> list[int] | None:
     """
     if original == modified:
         return None
-    used: set[int] = set()
+    # Build index of modified DRFs (handle duplicates by tracking used positions)
+    mod_positions: dict[str, list[int]] = {}
+    for i, drf in enumerate(modified):
+        mod_positions.setdefault(drf, []).append(i)
+
     result = []
     for orig_drf in original:
-        for mod_i, mod_drf in enumerate(modified):
-            if mod_i not in used and mod_drf == orig_drf:
-                result.append(mod_i)
-                used.add(mod_i)
-                break
-        else:
+        positions = mod_positions.get(orig_drf)
+        if not positions:
             raise ValueError(f"Policy removed DRF {orig_drf!r} — filtering is not supported")
+        result.append(positions.pop(0))
     return result
 
 

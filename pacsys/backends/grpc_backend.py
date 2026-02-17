@@ -358,6 +358,11 @@ def _is_logger_drf(drf: str) -> bool:
 
 def _merge_logger_readings(chunks: list[Reading], drf: str) -> Reading:
     """Merge multiple logger chunk Readings into a single TIMED_SCALAR_ARRAY."""
+    # Propagate error readings immediately instead of silently dropping them
+    for r in chunks:
+        if r.error_code and r.error_code != 0:
+            return r
+
     all_data: list[np.ndarray] = []
     all_micros: list[np.ndarray] = []
     first_ts = chunks[0].timestamp if chunks else None
@@ -693,11 +698,13 @@ class _DaqCore:
                     error_code=ec,
                     message=f"gRPC stream error ({target}): {code.name}: {e.details()}",
                 )
-                error_fn(exc, fatal=False)
                 if code in _RETRYABLE_STATUS_CODES:
+                    error_fn(exc, fatal=False)
                     logger.warning(f"gRPC stream {code.name} ({target}), retrying in {backoff:.1f}s: {e.details()}")
                 else:
-                    logger.error(f"gRPC stream {code.name} ({target}), retrying in {backoff:.1f}s: {e.details()}")
+                    error_fn(exc, fatal=True)
+                    logger.error(f"gRPC stream {code.name} ({target}), non-retryable: {e.details()}")
+                    return
 
             except Exception as e:
                 if stop_check():

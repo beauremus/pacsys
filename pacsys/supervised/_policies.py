@@ -159,6 +159,15 @@ class RateLimitPolicy(Policy):
         cutoff = now - self._window
 
         with self._lock:
+            # Prune stale peers (no activity in the last hour)
+            if len(self._timestamps) > 100:
+                stale_cutoff = now - 3600
+                stale = [
+                    peer for peer, ts_list in self._timestamps.items() if not ts_list or ts_list[-1] < stale_cutoff
+                ]
+                for peer in stale:
+                    del self._timestamps[peer]
+
             times = self._timestamps.get(ctx.peer, [])
             times = [t for t in times if t > cutoff]
 

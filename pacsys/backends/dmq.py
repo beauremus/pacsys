@@ -252,10 +252,9 @@ def _get_host_address() -> bytes:
     otherwise returns a fixed proxy address to avoid leaking private IPs.
     """
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        local_ip = socket.inet_aton(s.getsockname()[0])
-        s.close()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            local_ip = socket.inet_aton(s.getsockname()[0])
     except OSError as e:
         logger.warning("Cannot determine local IP, falling back to FNAL proxy: %s", e)
         local_ip = _FNAL_PROXY
@@ -338,7 +337,7 @@ _REPLY_VALUE_MAP: dict[type, tuple[ValueType, Any]] = {
 }
 
 
-def _reply_to_reading(reply, drf: str, ref_id: Optional[int] = None) -> Reading:
+def _reply_to_reading(reply, drf: str) -> Reading:
     """Convert a DMQ reply to a Reading object."""
     if isinstance(reply, ErrorSample_reply):
         return Reading(
@@ -574,6 +573,14 @@ class DMQBackend(Backend):
     def timeout(self) -> float:
         return self._timeout
 
+    @property
+    def authenticated(self) -> bool:
+        return self._auth is not None
+
+    @property
+    def principal(self) -> Optional[str]:
+        return self._auth.principal if self._auth is not None else None
+
     def _check_not_io_thread(self) -> None:
         """Raise if called from the IO thread to prevent deadlock."""
         if self._io_thread is not None and threading.current_thread() is self._io_thread:
@@ -796,12 +803,22 @@ class DMQBackend(Backend):
                     pass
                 return
 
-            self._send_init(channel, exchange_name, job.prepared_drfs, ctx, token)
-            job.consumer_tag = channel.basic_consume(
-                queue=queue_name,
-                on_message_callback=lambda ch, method, props, body: self._on_read_message(job, ch, method, body),
-                auto_ack=False,
-            )
+            try:
+                self._send_init(channel, exchange_name, job.prepared_drfs, ctx, token)
+                job.consumer_tag = channel.basic_consume(
+                    queue=queue_name,
+                    on_message_callback=lambda ch, method, props, body: self._on_read_message(job, ch, method, body),
+                    auto_ack=False,
+                )
+            except Exception as exc:
+                logger.error(f"Read setup failed after INIT: {exc}")
+                job.error = exc
+                self._complete_read(job)
+                try:
+                    if channel.is_open:
+                        channel.close()
+                except Exception:
+                    pass
 
         self._setup_channel_async(on_ready=on_ready)
 
@@ -819,7 +836,7 @@ class DMQBackend(Backend):
         filled = False
         for i in job.drf_to_all_indices.get(drf, ()):
             if i not in job.readings:
-                job.readings[i] = _reply_to_reading(reply, job.drfs[i], ref_id)
+                job.readings[i] = _reply_to_reading(reply, job.drfs[i])
                 filled = True
         if filled and len(job.readings) >= len(job.drfs):
             self._complete_read(job)
@@ -1844,6 +1861,7 @@ class DMQBackend(Backend):
     def _on_connection_closed(self, connection: SelectConnection, reason: Exception) -> None:
         """Called when SelectConnection is closed."""
         logger.info(f"SelectConnection closed: {reason}")
+        self._connection_ready.clear()
 
         # Fail all pending writes - signal each tracker exactly once
         trackers: dict[int, _WriteCompletionTracker] = {}
@@ -2038,7 +2056,7 @@ class DMQBackend(Backend):
 
         # Deliver to all indices sharing this DRF (handles duplicate subscriptions)
         for i in sub.drf_to_all_indices.get(drf, (idx,)):
-            reading = _reply_to_reading(reply, sub.drfs[i], ref_id)
+            reading = _reply_to_reading(reply, sub.drfs[i])
             if sub.callback is not None:
                 self._dispatcher.dispatch_reading(sub.callback, reading, handle)
             else:

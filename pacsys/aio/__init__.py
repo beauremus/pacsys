@@ -10,6 +10,7 @@ for use in async code. Uses lazy-initialized global async backend.
     await aio.shutdown()
 """
 
+import asyncio
 from typing import Optional
 
 from pacsys.aio._backends import AsyncBackend
@@ -48,10 +49,10 @@ def dpm(host=None, port=None, pool_size=None, timeout=None, auth=None, role=None
     from pacsys.aio._dpm_http import AsyncDPMHTTPBackend
 
     return AsyncDPMHTTPBackend(
-        host=host or "acsys-proxy.fnal.gov",
-        port=port or 6802,
-        pool_size=pool_size or 4,
-        timeout=timeout or 5.0,
+        host=host if host is not None else "acsys-proxy.fnal.gov",
+        port=port if port is not None else 6802,
+        pool_size=pool_size if pool_size is not None else 4,
+        timeout=timeout if timeout is not None else 5.0,
         auth=auth,
         role=role,
     )
@@ -110,10 +111,18 @@ def configure(
     global _global_async_backend, _async_backend_initialized
 
     if _async_backend_initialized:
-        if _global_async_backend is not None:
-            _global_async_backend._closed = True
-            _global_async_backend = None
+        old_backend = _global_async_backend
+        _global_async_backend = None
         _async_backend_initialized = False
+        if old_backend is not None:
+            old_backend._closed = True
+            # Schedule proper cleanup if event loop is running
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(old_backend.close())
+            except RuntimeError:
+                # No running loop -- force close synchronously
+                old_backend._closed = True
 
     if backend is not _UNSET:
         if backend is not None and backend not in _VALID_ASYNC_BACKENDS:
@@ -158,8 +167,8 @@ def _get_global_async_backend() -> AsyncBackend:
     if _global_async_backend is not None:
         return _global_async_backend
 
-    timeout = _config_timeout or 5.0
-    backend_type = _config_backend or "dpm"
+    timeout = _config_timeout if _config_timeout is not None else 5.0
+    backend_type = _config_backend if _config_backend is not None else "dpm"
 
     if backend_type == "dpm":
         _global_async_backend = dpm(

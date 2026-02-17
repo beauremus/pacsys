@@ -835,7 +835,12 @@ class DPMHTTPBackend(Backend):
                         elif isinstance(reply, ListStatus_reply):
                             pass
                         elif isinstance(reply, Status_reply):
-                            if reply.ref_id not in data_replies:
+                            if reply.ref_id in logger_refs:
+                                # Error for a logger DRF — record as an error chunk
+                                logger_chunks.setdefault(reply.ref_id, []).append(reply)
+                                logger_complete.add(reply.ref_id)
+                                received_count += 1
+                            elif reply.ref_id not in data_replies:
                                 data_replies[reply.ref_id] = reply
                                 received_count += 1
                         elif hasattr(reply, "ref_id"):
@@ -847,6 +852,9 @@ class DPMHTTPBackend(Backend):
                                     and len(reply.data) == 0
                                 )
                                 if is_empty:
+                                    if hasattr(reply, "status") and reply.status != 0:
+                                        # Error terminator — accumulate so _aggregate_logger_chunks surfaces the error
+                                        logger_chunks.setdefault(ref_id, []).append(reply)
                                     logger_complete.add(ref_id)
                                     received_count += 1
                                 else:
@@ -1092,6 +1100,9 @@ class DPMHTTPBackend(Backend):
         current_role = self._role
 
         with self._write_lock:
+            if self._closed:
+                raise RuntimeError("Backend is closed")
+
             # Close and remove stale connections
             fresh = []
             for wc in self._write_connections:
@@ -1476,6 +1487,12 @@ class DPMHTTPBackend(Backend):
             try:
                 assert list_id is not None, "list_id must be set after connect"
                 apply_reply, add_errors = self._execute_write(conn, list_id, prepared_settings, deadline)
+
+                if apply_reply is None:
+                    # Timeout: server's late reply may still be in the TCP stream,
+                    # so discard the connection to avoid corrupting the next write.
+                    self._discard_write_connection(wc)
+                    break
 
                 # Stop list (but keep connection and auth for reuse)
                 stop_req = StopList_request()

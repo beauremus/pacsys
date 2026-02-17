@@ -176,6 +176,8 @@ def _check_signed(value: int, size: int) -> int:
         raise ScalingError("Overflow")
     if size == 2 and (value < -32768 or value > 32767):
         raise ScalingError("Overflow")
+    if size == 4 and (value < -2147483648 or value > 2147483647):
+        raise ScalingError("Overflow")
     return value
 
 
@@ -183,6 +185,8 @@ def _check_unsigned(value: int, size: int) -> int:
     if size == 1 and (value < 0 or value > 255):
         raise ScalingError("Overflow")
     if size == 2 and (value < 0 or value > 65535):
+        raise ScalingError("Overflow")
+    if size == 4 and (value < 0 or value > 4294967295):
         raise ScalingError("Overflow")
     return value
 

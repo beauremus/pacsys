@@ -136,12 +136,15 @@ async def _callback_feeder(handle: AsyncSubscriptionHandle, callback, on_error) 
                 else:
                     callback(reading, h)
             except Exception as exc:
-                if on_error:
-                    if is_async_err:
-                        await on_error(exc, h)
+                try:
+                    if on_error:
+                        if is_async_err:
+                            await on_error(exc, h)
+                        else:
+                            on_error(exc, h)
                     else:
-                        on_error(exc, h)
-                else:
-                    logger.error("Unhandled error in subscription callback: %s", exc)
+                        logger.error("Unhandled error in subscription callback: %s", exc)
+                except Exception as err_exc:
+                    logger.error("Error in on_error callback: %s", err_exc)
     except asyncio.CancelledError:
         pass
