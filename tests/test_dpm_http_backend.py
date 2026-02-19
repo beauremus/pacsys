@@ -12,6 +12,7 @@ Tests cover:
 - Factory function
 """
 
+import socket
 from unittest import mock
 from unittest.mock import MagicMock
 
@@ -613,6 +614,97 @@ class TestErrorHandling:
                 assert reading.is_warning
                 assert reading.ok  # Warning with data is still usable
                 assert reading.value == TEMP_VALUE
+            finally:
+                backend.close()
+
+
+# =============================================================================
+# Delayed Error Response Tests
+# =============================================================================
+
+
+class TestDelayedErrorResponse:
+    """Tests for DPM error responses that arrive after a mini-timeout.
+
+    DPM returns DPM_PEND for nonexistent devices with a ~3s delay.
+    The recv loop uses 2s mini-timeouts. A transient timeout must NOT kill
+    the connection — it should retry and receive the delayed response.
+    """
+
+    def test_read_nonexistent_raises_device_error_after_delay(self):
+        """read() raises DeviceError even when the error reply is delayed.
+
+        Simulates: AddToList ok, StartList ok, then a 2s gap (socket.timeout)
+        before the DPM_PEND Status_reply arrives.
+        """
+        error_status = make_error(17, 1)  # DPM_PEND: facility=17, error=1
+        replies = [
+            make_add_to_list_reply(ref_id=1, status=0),
+            make_start_list(),
+            socket.timeout("delayed response"),  # 2s mini-timeout fires here
+            make_status_reply(status=error_status, ref_id=1),
+        ]
+        mock_socket = MockSocketWithReplies(list_id=1, replies=replies)
+
+        with mock.patch("socket.socket", return_value=mock_socket):
+            backend = DPMHTTPBackend()
+            try:
+                with pytest.raises(DeviceError) as exc_info:
+                    backend.read("Z:NOTFND", timeout=10.0)
+                assert exc_info.value.error_code == 1
+                assert exc_info.value.facility_code == 17
+            finally:
+                backend.close()
+
+    def test_get_nonexistent_returns_error_reading_after_delay(self):
+        """get() returns error Reading when DPM_PEND arrives after delay."""
+        error_status = make_error(17, 1)
+        replies = [
+            make_add_to_list_reply(ref_id=1, status=0),
+            make_start_list(),
+            socket.timeout("delayed response"),
+            make_status_reply(status=error_status, ref_id=1),
+        ]
+        mock_socket = MockSocketWithReplies(list_id=1, replies=replies)
+
+        with mock.patch("socket.socket", return_value=mock_socket):
+            backend = DPMHTTPBackend()
+            try:
+                reading = backend.get("Z:NOTFND", timeout=10.0)
+                assert not reading.ok
+                assert reading.error_code == 1
+                assert reading.facility_code == 17
+            finally:
+                backend.close()
+
+    def test_get_many_partial_failure_with_delay(self):
+        """get_many() returns mix of success and delayed error readings."""
+        error_status = make_error(17, 1)
+        replies = [
+            make_add_to_list_reply(ref_id=1, status=0),
+            make_add_to_list_reply(ref_id=2, status=0),
+            make_add_to_list_reply(ref_id=3, status=0),
+            make_device_info(name="M:OUTTMP", ref_id=1),
+            make_device_info(name="G:AMANDA", ref_id=3, di=12346),
+            make_start_list(),
+            make_scalar_reply(value=72.5, ref_id=1),
+            socket.timeout("delayed DPM_PEND"),
+            make_status_reply(status=error_status, ref_id=2),
+            make_scalar_reply(value=1.234, ref_id=3),
+        ]
+        mock_socket = MockSocketWithReplies(list_id=1, replies=replies)
+
+        with mock.patch("socket.socket", return_value=mock_socket):
+            backend = DPMHTTPBackend()
+            try:
+                readings = backend.get_many(["M:OUTTMP", "Z:NOTFND", "G:AMANDA"], timeout=10.0)
+                assert len(readings) == 3
+                assert readings[0].ok
+                assert readings[0].value == 72.5
+                assert not readings[1].ok
+                assert readings[1].error_code == 1
+                assert readings[2].ok
+                assert readings[2].value == 1.234
             finally:
                 backend.close()
 

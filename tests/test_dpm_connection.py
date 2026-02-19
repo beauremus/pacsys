@@ -337,6 +337,78 @@ class TestTimeoutHandling:
             with pytest.raises(TimeoutError, match="Receive timeout"):
                 conn.recv_message()
 
+    def test_recv_timeout_between_messages_keeps_connection_alive(self):
+        """Timeout waiting for next message doesn't kill the connection.
+
+        DPM error responses (e.g. DPM_PEND for nonexistent devices) can take
+        several seconds. The recv loop uses short (2s) mini-timeouts to check
+        deadlines. A timeout between messages must NOT mark the connection dead,
+        otherwise the retry raises 'Not connected' instead of waiting for the
+        delayed response.
+        """
+        scalar_reply = Scalar_reply()
+        scalar_reply.ref_id = 1
+        scalar_reply.data = 72.5
+        reply_data = bytes(scalar_reply.marshal())
+        reply_frame = struct.pack(">I", len(reply_data)) + reply_data
+
+        open_list_reply = OpenList_reply()
+        open_list_reply.list_id = 1
+        handshake_data = bytes(open_list_reply.marshal())
+        handshake_frame = struct.pack(">I", len(handshake_data)) + handshake_data
+
+        mock_socket = mock.Mock(spec=socket.socket)
+        mock_socket.recv.side_effect = [
+            handshake_frame,  # connect()
+            socket.timeout("no data yet"),  # 1st recv_message() — times out
+            reply_frame,  # 2nd recv_message() — data arrives
+        ]
+
+        with mock.patch("socket.socket", return_value=mock_socket):
+            conn = DPMConnection()
+            conn.connect()
+
+            # First call times out — connection must stay alive
+            with pytest.raises(TimeoutError):
+                conn.recv_message(timeout=2.0)
+            assert conn.connected
+
+            # Second call succeeds — delayed reply arrives
+            reply = conn.recv_message()
+            assert isinstance(reply, Scalar_reply)
+            assert reply.data == 72.5
+
+    def test_recv_timeout_mid_body_kills_connection(self):
+        """Timeout during message body read kills the connection.
+
+        If the length prefix was read but the body times out, the stream
+        position is unknown — the connection must be marked dead.
+        """
+        open_list_reply = OpenList_reply()
+        open_list_reply.list_id = 1
+        handshake_data = bytes(open_list_reply.marshal())
+        handshake_frame = struct.pack(">I", len(handshake_data)) + handshake_data
+
+        # Build a frame whose length prefix arrives but body times out
+        body_data = bytes(Scalar_reply().marshal())
+        length_prefix = struct.pack(">I", len(body_data))
+
+        mock_socket = mock.Mock(spec=socket.socket)
+        mock_socket.recv.side_effect = [
+            handshake_frame,  # connect()
+            length_prefix,  # recv_message reads 4-byte length...
+            socket.timeout("body timeout"),  # ...but body times out
+        ]
+
+        with mock.patch("socket.socket", return_value=mock_socket):
+            conn = DPMConnection()
+            conn.connect()
+
+            with pytest.raises(TimeoutError):
+                conn.recv_message(timeout=2.0)
+            # Connection must be dead — stream is corrupted
+            assert not conn.connected
+
 
 class TestPartialReads:
     """Tests for handling partial reads."""

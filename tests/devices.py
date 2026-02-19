@@ -231,7 +231,8 @@ class MockSocketWithReplies:
         """Receive next chunk of data.
 
         Returns data from internal buffer. When buffer is empty,
-        adds the next reply from the replies list.
+        adds the next reply from the replies list. If the next reply is
+        a socket.timeout exception, raises it to simulate a delayed response.
         """
         if self._closed:
             raise BrokenPipeError("Socket closed")
@@ -240,6 +241,8 @@ class MockSocketWithReplies:
         if not self._recv_buffer and self._reply_index < len(self.replies):
             reply = self.replies[self._reply_index]
             self._reply_index += 1
+            if isinstance(reply, socket.timeout):
+                raise reply
             self._recv_buffer.extend(create_reply_frame(reply))
 
         if not self._recv_buffer:

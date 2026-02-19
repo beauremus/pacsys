@@ -309,6 +309,7 @@ class ConnectionPool:
                 logger.debug(f"Released connection, available={len(self._available)}, in_use={len(self._in_use)}")
             else:
                 # Connection is dead, don't return to pool
+                self._close_connection(conn)
                 logger.debug("Released dead connection (discarded)")
 
             # Notify waiters that a connection may be available

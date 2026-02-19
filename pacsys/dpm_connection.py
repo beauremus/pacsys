@@ -403,18 +403,26 @@ class DPMConnection:
         if timeout is not None:
             self._socket.settimeout(timeout)
 
+        mid_message = False
         try:
             # Read length prefix (4 bytes)
             len_bytes = self._recv_exact(4)
             length = struct.unpack(">I", len_bytes)[0]
 
             if length == 0 or length > MAX_MESSAGE_SIZE:
+                # Can't skip unknown-length body — stream is unrecoverable
+                self._connected = False
+                self._recv_buffer.clear()
                 raise DPMConnectionError(f"Invalid message length: {length}")
 
-            # Read message body
+            # Stream is committed: we must read `length` bytes or die trying.
+            # A timeout here corrupts the stream (partial body consumed).
+            mid_message = True
             data = self._recv_exact(length)
 
-            # Unmarshal
+            # Full message consumed — stream is at next frame boundary.
+            # Unmarshal errors are safe (stream position is valid).
+            mid_message = False
             reply = self._unmarshal_reply(data)
             if _TRACE_DPM:
                 logger.debug(f"DPM RX: {_summarize_message(reply)}")
@@ -423,8 +431,12 @@ class DPMConnection:
             return reply
 
         except socket.timeout:
-            self._connected = False
-            self._recv_buffer.clear()
+            if mid_message:
+                # Timed out mid-message body: stream position is lost
+                self._connected = False
+                self._recv_buffer.clear()
+            # Timed out waiting for next message (or during length prefix):
+            # connection is still usable, partial prefix bytes stay in buffer
             raise TimeoutError("Receive timeout")
         except socket.error as e:
             self._connected = False

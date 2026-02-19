@@ -862,7 +862,7 @@ class DPMHTTPBackend(Backend):
                             elif ref_id not in data_replies:
                                 data_replies[ref_id] = reply
                                 received_count += 1
-                except (BrokenPipeError, ConnectionResetError, OSError) as e:
+                except (BrokenPipeError, ConnectionResetError, OSError, DPMConnectionError) as e:
                     conn_broken = True
                     transport_error = e
                 finally:

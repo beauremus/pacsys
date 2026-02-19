@@ -437,17 +437,21 @@ def ssh_jump_available() -> bool:
         return False
 
 
+_ssh_ok = bool(SSH_JUMP_HOST and SSH_DEST_HOST) and kerberos_available() and ssh_jump_available()
+
 requires_ssh = pytest.mark.skipif(
-    not SSH_JUMP_HOST or not SSH_DEST_HOST,
-    reason="SSH tests require PACSYS_TEST_SSH_JUMP and PACSYS_TEST_SSH_DEST env vars (see tests/real/.env.ssh)",
+    not _ssh_ok,
+    reason="SSH tests require env vars (PACSYS_TEST_SSH_JUMP, PACSYS_TEST_SSH_DEST), valid Kerberos tickets, and a reachable jump host",
 )
 
 ACL_JUMP_HOST = os.environ.get("PACSYS_TEST_ACL_JUMP", "")
 ACL_DEST_HOST = os.environ.get("PACSYS_TEST_ACL_DEST", "")
 
+_acl_ssh_ok = bool(ACL_JUMP_HOST and ACL_DEST_HOST) and kerberos_available() and ssh_jump_available()
+
 requires_acl_ssh = pytest.mark.skipif(
-    not ACL_JUMP_HOST or not ACL_DEST_HOST,
-    reason="ACL-over-SSH tests require PACSYS_TEST_ACL_JUMP and PACSYS_TEST_ACL_DEST env vars (see tests/real/.env.ssh)",
+    not _acl_ssh_ok,
+    reason="ACL-over-SSH tests require env vars (PACSYS_TEST_ACL_JUMP, PACSYS_TEST_ACL_DEST), valid Kerberos tickets, and a reachable jump host",
 )
 
 requires_write_enabled = pytest.mark.skipif(
